@@ -171,4 +171,20 @@ def describe_cache(cfg: Config, study_uids: Sequence[str]) -> dict[str, Any]:
     }
 
 
-__all__ = ["KneeDataset", "StudySample", "describe_cache"]
+def missing_cache(cfg: Config, study_uids: Sequence[str]) -> dict[str, int]:
+    """Số study còn **thiếu** từng loại cache bắt buộc (teacher, guidance, weak label).
+
+    Dataset thay phần thiếu bằng vector 0 mà không báo lỗi, nên huấn luyện trên
+    cache chưa đầy đủ sẽ cho kết quả sai một cách im lặng. Mask không nằm trong
+    danh sách vì thiếu mask chỉ làm mất bước cắt ROI, không làm hỏng dữ liệu.
+
+    Returns:
+        Dict chỉ chứa các loại còn thiếu; rỗng nghĩa là cache đã đầy đủ.
+    """
+    cache = describe_cache(cfg, study_uids)
+    total = cache["studies"]
+    gaps = {key: total - cache[key] for key in ("teacher_feats", "guidance", "weak_labels")}
+    return {key: count for key, count in gaps.items() if count > 0}
+
+
+__all__ = ["KneeDataset", "StudySample", "describe_cache", "missing_cache"]
