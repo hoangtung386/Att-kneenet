@@ -14,17 +14,16 @@ import numpy as np
 import torch
 
 from knee_mri.config.schema import Config
-from knee_mri.data.catalog import StudyCatalog
+from knee_mri.data.catalog import SeriesInfo, StudyCatalog
 from knee_mri.data.dicom_io import EmptySeriesError
 from knee_mri.data.normalize import resize_volume
 from knee_mri.data.series_selection import representative_series
 from knee_mri.data.volume import build_volume
 from knee_mri.explain.cam import attention_rollout, attention_to_volume, save_cam
 from knee_mri.explain.overlay import OverlapReport, cam_mask_overlap
-from knee_mri.models.heads import ClassifierHead, make_metadata_vector
+from knee_mri.inference.predictor import Predictor
+from knee_mri.models.heads import make_metadata_vector
 from knee_mri.models.report_generator import GemmaReportGenerator, rule_based_report
-from knee_mri.models.student import ViT3DStudent
-from knee_mri.training.checkpoint import BEST_NAME, load_for_inference
 from knee_mri.utils.logging import get_logger
 from knee_mri.utils.mask import load_mask
 
@@ -42,7 +41,80 @@ class ExplanationResult:
     report_path: Path
 
 
+@dataclass(frozen=True, slots=True)
+class CamResult:
+    """Dự đoán + CAM của series đại diện cho một study (chưa ghi ra đĩa)."""
+
+    series: SeriesInfo
+    volume: np.ndarray
+    mask: np.ndarray | None
+    probabilities: np.ndarray
+    cam: np.ndarray
+    overlap: OverlapReport | None
+
+
 @torch.no_grad()
+def compute_cam(
+    cfg: Config,
+    predictor: Predictor,
+    catalog: StudyCatalog,
+    study_uid: str,
+) -> CamResult | None:
+    """Dự đoán và dựng CAM cho series đại diện của một study.
+
+    Dùng chung cho :func:`explain_studies` và notebook trực quan hóa, để hai nơi
+    không thể lệch nhau về cách chọn series, áp mask, hay so CAM với ROI.
+
+    Returns:
+        :class:`CamResult`, hoặc ``None`` nếu study không có series đọc được.
+    """
+    series = representative_series(catalog, study_uid, cfg.data)
+    if series is None:
+        return None
+    series_dir = cfg.paths.series_dir(study_uid, series.series_uid)
+    if series_dir is None:
+        return None
+
+    mask = load_mask(study_uid, series.series_uid, cfg.paths.masks)
+    try:
+        volume = build_volume(series_dir, cfg.data, mask=mask)
+    except (EmptySeriesError, ValueError) as exc:
+        logger.warning("Bỏ qua study %s: %s", study_uid[:16], exc)
+        return None
+
+    device = predictor.device
+    tensor = torch.from_numpy(volume)[None, None].to(device)
+    metadata = torch.tensor([make_metadata_vector(series)], dtype=torch.float32, device=device)
+
+    features, attentions = predictor.student(tensor, return_attn=True)
+    logits = predictor.classifier(features, metadata)
+    probabilities = torch.sigmoid(logits.float())[0].cpu().numpy()
+
+    if not attentions:  # pragma: no cover - chỉ xảy ra nếu student bị sửa sai
+        logger.error("Student không trả về attention — không dựng được CAM.")
+        return None
+
+    cam = attention_to_volume(
+        attention_rollout(attentions), predictor.student.grid, cfg.data.target_shape
+    )
+    # So CAM với mask đã resize về cùng shape mà student thực sự nhìn.
+    overlap: OverlapReport | None = None
+    if mask is not None:
+        resized_mask = (resize_volume(mask.astype(np.float32), cfg.data.target_shape) > 0.5).astype(
+            np.uint8
+        )
+        overlap = cam_mask_overlap(cam, resized_mask)
+
+    return CamResult(
+        series=series,
+        volume=volume,
+        mask=mask,
+        probabilities=probabilities,
+        cam=cam,
+        overlap=overlap,
+    )
+
+
 def explain_studies(
     cfg: Config,
     catalog: StudyCatalog,
@@ -53,54 +125,21 @@ def explain_studies(
     use_vlm: bool = False,
 ) -> list[ExplanationResult]:
     """Sinh CAM + báo cáo cho từng study, lưu ra ``artifacts/``."""
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     cfg.paths.ensure()
-
-    student = ViT3DStudent(cfg)
-    classifier = ClassifierHead(cfg)
-    load_for_inference(
-        checkpoint or (cfg.paths.checkpoints / BEST_NAME),
-        {"student": student, "classifier": classifier},
-        device=device,
-    )
-    generator = GemmaReportGenerator(cfg, device=device) if use_vlm else None
+    predictor = Predictor.from_checkpoint(cfg, checkpoint=checkpoint, device=device)
+    generator = GemmaReportGenerator(cfg, device=predictor.device) if use_vlm else None
     results: list[ExplanationResult] = []
 
     for study_uid in study_uids:
-        series = representative_series(catalog, study_uid, cfg.data)
-        if series is None:
+        explained = compute_cam(cfg, predictor, catalog, study_uid)
+        if explained is None:
             continue
-        series_dir = cfg.paths.series_dir(study_uid, series.series_uid)
-        if series_dir is None:
-            continue
-
-        mask = load_mask(study_uid, series.series_uid, cfg.paths.masks)
-        try:
-            volume = build_volume(series_dir, cfg.data, mask=mask)
-        except (EmptySeriesError, ValueError) as exc:
-            logger.warning("Bỏ qua study %s: %s", study_uid[:16], exc)
-            continue
-
-        tensor = torch.from_numpy(volume)[None, None].to(device)
-        metadata = torch.tensor([make_metadata_vector(series)], dtype=torch.float32, device=device)
-
-        features, attentions = student(tensor, return_attn=True)
-        logits = classifier(features, metadata)
-        probabilities = torch.sigmoid(logits.float())[0].cpu().numpy()
-
-        overlap: OverlapReport | None = None
-        if attentions:
-            patch_attention = attention_rollout(attentions)
-            cam = attention_to_volume(patch_attention, student.grid, cfg.data.target_shape)
-            save_cam(cam, study_uid, series.series_uid, cfg.paths.cams)
-            # So CAM với mask đã resize về cùng shape mà student thực sự nhìn.
-            if mask is not None:
-                resized_mask = (
-                    resize_volume(mask.astype(np.float32), cfg.data.target_shape) > 0.5
-                ).astype(np.uint8)
-                overlap = cam_mask_overlap(cam, resized_mask)
-        else:  # pragma: no cover - chỉ xảy ra nếu student bị sửa sai
-            logger.error("Student không trả về attention — không dựng được CAM.")
+        series, probabilities, overlap = (
+            explained.series,
+            explained.probabilities,
+            explained.overlap,
+        )
+        save_cam(explained.cam, study_uid, series.series_uid, cfg.paths.cams)
 
         text = (
             generator.generate(probabilities)
@@ -138,4 +177,4 @@ def explain_studies(
     return results
 
 
-__all__ = ["ExplanationResult", "explain_studies"]
+__all__ = ["CamResult", "ExplanationResult", "compute_cam", "explain_studies"]

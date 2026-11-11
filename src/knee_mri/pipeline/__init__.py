@@ -14,16 +14,30 @@ Thứ tự chạy::
     predict_submission          (submit)
 """
 
-from knee_mri.pipeline.explain_step import ExplanationResult, explain_studies
+from knee_mri.pipeline.explain_step import (
+    CamResult,
+    ExplanationResult,
+    compute_cam,
+    explain_studies,
+)
 from knee_mri.pipeline.features import precompute_guidance, precompute_teacher_features
 from knee_mri.pipeline.masks import generate_masks
+from knee_mri.pipeline.preflight import PreflightReport, estimate_mask_gb, run_preflight
+from knee_mri.pipeline.runner import StageTimer, estimate_full_run
 from knee_mri.pipeline.weak_labels import precompute_weak_labels
 
 __all__ = [
+    "CamResult",
     "ExplanationResult",
+    "PreflightReport",
+    "StageTimer",
+    "compute_cam",
+    "estimate_full_run",
+    "estimate_mask_gb",
     "explain_studies",
     "generate_masks",
     "precompute_guidance",
     "precompute_teacher_features",
     "precompute_weak_labels",
+    "run_preflight",
 ]
