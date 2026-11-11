@@ -61,7 +61,7 @@ def negation_positions(clause: str) -> list[int]:
     return [match.start() for match in NEGATION_PATTERN.finditer(clause)]
 
 
-def is_negated(clause: str, finding_at: int | None = None) -> bool:
+def is_negated(clause: str, finding_at: int | None = None, finding_end: int | None = None) -> bool:
     """Phát hiện tại vị trí ``finding_at`` trong mệnh đề có bị phủ định không.
 
     Quy tắc, theo thứ tự áp dụng:
@@ -72,7 +72,8 @@ def is_negated(clause: str, finding_at: int | None = None) -> bool:
        vị trí tương đối cũng xử lý đúng câu hỗn hợp như *"Effusion present, no
        fracture"* — nhãn Effusion dương, nhãn Fracture âm.
     3. Dấu hiệu đứng ngay **sau** phát hiện, cách không quá
-       :data:`_TRAILING_NEGATION_GAP` ký tự và không có dấu ngắt ý xen giữa →
+       :data:`_TRAILING_NEGATION_GAP` ký tự (tính từ **cuối** thuật ngữ, không
+       tính chính thuật ngữ) và không có dấu ngắt ý xen giữa →
        phủ định. Bắt lối nói hậu tố mà vẫn giữ đúng *"Effusion present, no
        fracture"* (dấu phẩy tách hai khẳng định).
 
@@ -80,6 +81,10 @@ def is_negated(clause: str, finding_at: int | None = None) -> bool:
         clause: Mệnh đề đã chuẩn hóa chữ thường.
         finding_at: Vị trí bắt đầu của thuật ngữ bệnh lý. ``None`` nghĩa là hỏi
             chung "mệnh đề này có mang phủ định không".
+        finding_end: Vị trí kết thúc của thuật ngữ; mặc định coi như bằng
+            ``finding_at``. Cần truyền khi có để đo khoảng cách đúng — *"medial
+            collateral ligament complexes are intact"* có thuật ngữ dài 17 ký tự,
+            nếu tính cả vào khoảng cách thì phủ định hậu tố bị bỏ sót.
     """
     positions = negation_positions(clause)
     if not positions:
@@ -89,15 +94,16 @@ def is_negated(clause: str, finding_at: int | None = None) -> bool:
     if any(position < finding_at for position in positions):
         return True
 
-    trailing = [position for position in positions if position >= finding_at]
+    gap_from = finding_at if finding_end is None else max(finding_end, finding_at)
+    trailing = [position for position in positions if position >= gap_from]
     if not trailing:
         return False
-    gap = clause[finding_at : trailing[0]]
+    gap = clause[gap_from : trailing[0]]
     return len(gap) <= _TRAILING_NEGATION_GAP and not (_CLAUSE_BREAKS & set(gap))
 
 
-def _label_match_position(clause: str, label: str) -> int | None:
-    """Vị trí sớm nhất mà mệnh đề đề cập tới bệnh lý của nhãn.
+def _label_match_span(clause: str, label: str) -> tuple[int, int] | None:
+    """Khoảng ``(bắt đầu, kết thúc)`` của chỗ mệnh đề đề cập tới bệnh lý của nhãn.
 
     Trả về ``None`` nếu mệnh đề không nhắc tới nhãn này.
     """
@@ -108,13 +114,16 @@ def _label_match_position(clause: str, label: str) -> int | None:
         side_match = SIDE_PATTERNS[side].search(clause)
         if anatomy is None or side_match is None:
             return None
-        return min(anatomy.start(), side_match.start())
+        # Phủ định áp dụng cho thuật ngữ *bệnh lý* (anatomy), không phải từ chỉ bên:
+        # "patellar cartilage appears congruent without chondral lesion" bị phủ định
+        # tại "chondral lesion", dù "patellar" đứng trước chữ "without".
+        return anatomy.start(), anatomy.end()
 
     pattern = DIRECT_LABEL_PATTERNS.get(label)
     if pattern is None:
         return None
     match = pattern.search(clause)
-    return match.start() if match else None
+    return (match.start(), match.end()) if match else None
 
 
 def keyword_labeler(report: str, *, labels: Sequence[str] = LABELS) -> dict[str, int]:
@@ -135,8 +144,8 @@ def keyword_labeler(report: str, *, labels: Sequence[str] = LABELS) -> dict[str,
         for label in labels:
             if result[label]:
                 continue
-            position = _label_match_position(clause, label)
-            if position is not None and not is_negated(clause, position):
+            span = _label_match_span(clause, label)
+            if span is not None and not is_negated(clause, *span):
                 result[label] = 1
     return result
 

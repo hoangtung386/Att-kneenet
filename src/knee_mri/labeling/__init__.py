@@ -8,12 +8,22 @@ Hai đường:
   chính xác hơn nhưng cần GPU. Chỉ dùng ở bước precompute offline.
 """
 
+from knee_mri.labeling.evaluate import (
+    LabelerReport,
+    cached_weak_labels,
+    format_labeler_report,
+    score_labeler,
+)
 from knee_mri.labeling.llm_based import GemmaReportParser, extract_json_labels
 from knee_mri.labeling.rule_based import keyword_labeler, label_vector
 
 __all__ = [
     "GemmaReportParser",
+    "LabelerReport",
+    "cached_weak_labels",
     "extract_json_labels",
+    "format_labeler_report",
     "keyword_labeler",
     "label_vector",
+    "score_labeler",
 ]

@@ -162,3 +162,29 @@ class TestJsonExtraction:
 
     def test_returns_all_zeros_on_garbage(self) -> None:
         assert extract_json_labels("không có json ở đây") == dict.fromkeys(LABELS, 0)
+
+
+class TestSuffixNegationDistance:
+    """Khoảng cách phủ định hậu tố đo từ *cuối* thuật ngữ, không tính thuật ngữ."""
+
+    def test_long_ligament_name_with_trailing_intact(self) -> None:
+        report = "The medial collateral ligament complexes are intact."
+        assert keyword_labeler(report)["MCL"] == 0
+
+    def test_real_mcl_tear_still_flagged(self) -> None:
+        assert keyword_labeler("Grade II sprain of the medial collateral ligament.")["MCL"] == 1
+
+
+class TestPatellofemoralOA:
+    def test_region_heading_alone_is_not_oa(self) -> None:
+        report = (
+            "The patellofemoral joint, the patellar cartilage appears congruent "
+            "without chondral lesion."
+        )
+        assert keyword_labeler(report)["PF OA"] == 0
+
+    @pytest.mark.parametrize(
+        "report", ["Grade 3 chondrosis of the patella.", "Condropatía rotuliana."]
+    )
+    def test_patellar_chondral_disease_is_flagged(self, report: str) -> None:
+        assert keyword_labeler(report)["PF OA"] == 1
