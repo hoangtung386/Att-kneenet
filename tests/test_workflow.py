@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
 
-from knee_mri.config import Config  # noqa: E402
+from knee_mri.config import Config, load_config  # noqa: E402
 from knee_mri.data.catalog import SeriesInfo, StudyCatalog  # noqa: E402
 from knee_mri.data.dataset import missing_cache  # noqa: E402
 from knee_mri.data.series_selection import select_series  # noqa: E402
@@ -190,3 +192,18 @@ class TestEvaluateAndCam:
         # Không có DICOM thật cho catalog giả → series_dir None → trả None, không crash.
         assert compute_cam(cfg, predictor, catalog, "study-c") is None
         assert compute_cam(cfg, predictor, catalog, "study-a") is None
+
+
+class TestDinoWeightsOverride:
+    """Notebook 02 dùng đường dẫn tuyệt đối thay symlink (Google Drive không có symlink)."""
+
+    def test_absolute_weight_file_ignores_artifacts_root(self, tmp_path: Path) -> None:
+        shared = tmp_path / "artifacts" / "3dino_vit_weights.pth"
+        cfg = load_config(
+            "test",
+            overrides={
+                "paths": {"artifacts_root": str(tmp_path / "artifacts" / "pilot")},
+                "dino": {"weight_file": str(shared)},
+            },
+        )
+        assert cfg.dino.weights_path(cfg.paths.artifacts_root) == shared
