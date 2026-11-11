@@ -102,7 +102,7 @@ configs/                 # cấu hình YAML theo môi trường
 docs/                    # kiến trúc, ghi chú dữ liệu, chuẩn hóa, hướng dẫn refactor
 notebooks/               # 01 phân tích dữ liệu · 02 huấn luyện Colab · 03 trực quan hóa
 scripts/                 # entrypoint CLI mỏng, mỗi file một bước
-tests/                   # 220 test, chạy được không cần GPU
+tests/                   # 237 test, chạy được không cần GPU
 src/knee_mri/
   config/                # schema dataclass + loader YAML
   constants.py           # LABELS, tên cột CSV — hằng số của đề bài
@@ -128,7 +128,7 @@ make smoke          # chạy pipeline đầu-cuối trên tập nhỏ, không c�
 |---|---|
 | `ruff check` + `ruff format` | sạch |
 | `mypy` (49 file) | không lỗi |
-| `pytest` | 220 test |
+| `pytest` | 237 test |
 | Độ phủ | 80% |
 
 Test khóa lại **từng** lỗi đã sửa trong đợt refactor, nên chúng không thể tái

@@ -210,26 +210,26 @@ def evaluate(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--checkpoint", type=Path, default=None, help="Đường dẫn checkpoint.")
     args = parser.parse_args(argv)
 
-    import numpy as np
-
-    from knee_mri.inference.predictor import Predictor
-    from knee_mri.training.metrics import format_auc_report, macro_auc
+    from knee_mri.inference.predictor import Predictor, evaluate_gold
+    from knee_mri.training.metrics import format_auc_report
 
     cfg, catalog, _ = prepare(args)
     gold_uids = catalog.studies_with_gold()
     if args.limit is not None:
         gold_uids = gold_uids[: args.limit]
-    if not gold_uids:
-        logger.error("Không có study nào có nhãn gold để đánh giá.")
-        return 1
 
-    uids, truth_rows = catalog.gold_matrix(gold_uids)
     predictor = Predictor.from_checkpoint(
         cfg, checkpoint=args.checkpoint, device=_resolve_device(args)
     )
-    scores = predictor.predict_many(catalog, uids)
-    report = macro_auc(np.array(truth_rows, dtype=np.float32), scores)
-    logger.info("Đánh giá trên %d study có nhãn gold:\n%s", len(uids), format_auc_report(report))
+    evaluation = evaluate_gold(predictor, catalog, gold_uids)
+    if evaluation is None:
+        logger.error("Không có study nào có nhãn gold để đánh giá.")
+        return 1
+    logger.info(
+        "Đánh giá trên %d study có nhãn gold:\n%s",
+        len(evaluation.study_uids),
+        format_auc_report(evaluation.report),
+    )
     return 0
 
 

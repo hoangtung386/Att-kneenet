@@ -26,6 +26,7 @@ from knee_mri.data.volume import build_volume
 from knee_mri.models.heads import ClassifierHead, make_metadata_vector
 from knee_mri.models.student import ViT3DStudent
 from knee_mri.training.checkpoint import BEST_NAME, load_for_inference
+from knee_mri.training.metrics import AucReport, macro_auc
 from knee_mri.utils.logging import get_logger
 from knee_mri.utils.mask import load_mask
 
@@ -106,6 +107,43 @@ class Predictor:
         return np.stack(rows) if rows else np.zeros((0, NUM_LABELS), dtype=np.float32)
 
 
+@dataclass(frozen=True, slots=True)
+class GoldEvaluation:
+    """Kết quả đo AUC trên các study có nhãn gold."""
+
+    study_uids: list[str]
+    scores: np.ndarray
+    truths: np.ndarray
+    report: AucReport
+
+
+def evaluate_gold(
+    predictor: Predictor,
+    catalog: StudyCatalog,
+    study_uids: Sequence[str] | None = None,
+    *,
+    log_every: int = 25,
+) -> GoldEvaluation | None:
+    """Đo AUC macro bằng đường inference thật (chỉ ảnh + metadata).
+
+    Args:
+        study_uids: Các study cần đo; study không có nhãn gold bị bỏ qua. ``None``
+            = toàn bộ study gold của catalog.
+
+    Returns:
+        :class:`GoldEvaluation`, hoặc ``None`` nếu không có study gold nào.
+    """
+    candidates = catalog.studies_with_gold() if study_uids is None else study_uids
+    uids, truth_rows = catalog.gold_matrix(candidates)
+    if not uids:
+        return None
+    scores = predictor.predict_many(catalog, uids, log_every=log_every)
+    truths = np.array(truth_rows, dtype=np.float32)
+    return GoldEvaluation(
+        study_uids=list(uids), scores=scores, truths=truths, report=macro_auc(truths, scores)
+    )
+
+
 def build_submission(study_uids: Sequence[str], probabilities: np.ndarray) -> pd.DataFrame:
     """Dựng DataFrame đúng định dạng ``sample_submission.csv``."""
     frame = pd.DataFrame(probabilities, columns=list(LABELS))
@@ -143,7 +181,9 @@ def predict_submission(
 
 __all__ = [
     "NEUTRAL_PROBABILITY",
+    "GoldEvaluation",
     "Predictor",
     "build_submission",
+    "evaluate_gold",
     "predict_submission",
 ]
