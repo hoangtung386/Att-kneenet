@@ -6,6 +6,13 @@ __pycache__/
 build/
 dist/
 
+# ---- Cache công cụ ----
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
 # ---- Môi trường ảo ----
 .venv/
 venv/
