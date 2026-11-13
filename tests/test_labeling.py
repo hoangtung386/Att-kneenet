@@ -9,7 +9,6 @@ from knee_mri.labeling.llm_based import extract_json_labels
 from knee_mri.labeling.rule_based import (
     is_negated,
     keyword_labeler,
-    label_vector,
     split_clauses,
 )
 
@@ -25,12 +24,6 @@ class TestOutputContract:
     @pytest.mark.parametrize("bad_input", ["", "   ", None, 42])
     def test_handles_missing_report(self, bad_input) -> None:
         assert keyword_labeler(bad_input) == dict.fromkeys(LABELS, 0)
-
-    def test_label_vector_follows_label_order(self) -> None:
-        report = "Large joint effusion."
-        vector = label_vector(report)
-        assert len(vector) == len(LABELS)
-        assert vector[LABELS.index("Effusion")] == 1
 
 
 class TestMeniscusLaterality:

@@ -41,6 +41,8 @@ knee-teacher-feats = "knee_mri.cli:precompute_teacher_feats"
 knee-guidance = "knee_mri.cli:precompute_guidance"
 knee-train = "knee_mri.cli:train"
 knee-evaluate = "knee_mri.cli:evaluate"
+knee-probe = "knee_mri.cli:probe"
+knee-similarity = "knee_mri.cli:similarity"
 knee-predict = "knee_mri.cli:predict"
 knee-explain = "knee_mri.cli:explain"
 

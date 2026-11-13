@@ -6,8 +6,6 @@ chỉ có chuyện đọc file và sắp xếp lát cắt đúng thứ tự gi�
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -29,18 +27,50 @@ def list_dicom_files(series_dir: Path) -> list[Path]:
     return sorted(p for p in series_dir.iterdir() if p.suffix.lower() == DICOM_SUFFIX)
 
 
-def _slice_sort_key(dataset: FileDataset) -> tuple[float, float]:
-    """Khóa sắp xếp: vị trí không gian, dự phòng bằng ``InstanceNumber``.
+def _slice_normal(dataset: FileDataset) -> np.ndarray | None:
+    """Pháp tuyến của mặt phẳng lát cắt, hướng về phía dương của trục trội.
 
-    ``ImagePositionPatient[2]`` là tọa độ dọc trục bệnh nhân — đáng tin hơn số
-    thứ tự ảnh vì phản ánh hình học thật của chuỗi chụp.
+    Tích có hướng của hai vector hướng hàng/cột (``ImageOrientationPatient``) cho
+    trục mà các lát xếp dọc theo: trục z với axial, x với sagittal, y với
+    coronal. Dấu của pháp tuyến được cố định sao cho thành phần lớn nhất luôn
+    dương, nên cùng một mặt phẳng giải phẫu luôn được sắp cùng chiều bất kể máy
+    chụp ghi hướng hàng/cột theo quy ước nào.
+    """
+    orientation = getattr(dataset, "ImageOrientationPatient", None)
+    if orientation is None:
+        return None
+    try:
+        values = np.asarray([float(v) for v in orientation], dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if values.shape != (6,):
+        return None
+    normal = np.cross(values[:3], values[3:])
+    if not np.any(normal):
+        return None
+    if normal[np.argmax(np.abs(normal))] < 0:
+        normal = -normal
+    return normal
+
+
+def _slice_sort_key(dataset: FileDataset) -> tuple[float, float]:
+    """Khóa sắp xếp: tọa độ dọc pháp tuyến lát, dự phòng ``InstanceNumber``.
+
+    Bản cũ chỉ dùng ``ImagePositionPatient[2]`` (trục z). Với series sagittal và
+    coronal, các lát trải dọc trục x/y nên z gần như hằng, thứ tự phụ thuộc vào
+    độ nghiêng ngẫu nhiên của máy và chiều lát bị đảo tùy series. Chiếu vị trí
+    lên pháp tuyến cho thứ tự đúng và nhất quán cho cả ba mặt phẳng.
     """
     position = getattr(dataset, "ImagePositionPatient", None)
     instance = getattr(dataset, "InstanceNumber", None)
-    try:
-        primary = float(position[2]) if position is not None else float("inf")
-    except (TypeError, ValueError, IndexError):
-        primary = float("inf")
+    primary = float("inf")
+    if position is not None:
+        try:
+            coords = np.asarray([float(v) for v in position], dtype=np.float64)
+            normal = _slice_normal(dataset)
+            primary = float(coords @ normal) if normal is not None else float(coords[2])
+        except (TypeError, ValueError, IndexError):
+            pass
     try:
         secondary = float(instance) if instance is not None else 0.0
     except (TypeError, ValueError):
@@ -48,38 +78,17 @@ def _slice_sort_key(dataset: FileDataset) -> tuple[float, float]:
     return primary, secondary
 
 
-@lru_cache(maxsize=1)
-def _apply_voi_lut() -> Callable[..., np.ndarray]:
-    """Trả về hàm ``apply_voi_lut``, tương thích cả pydicom 2.x lẫn 3.x.
-
-    Vị trí của hàm này đổi giữa hai phiên bản; cache kết quả để không phải thử
-    import lại cho mỗi lát cắt.
-    """
-    try:
-        from pydicom.pixels import apply_voi_lut
-    except ImportError:  # pydicom < 3.0
-        from pydicom.pixel_data_handlers.util import (  # type: ignore[no-redef]
-            apply_voi_lut,
-        )
-    return apply_voi_lut
-
-
 def slice_pixels(dataset: FileDataset) -> np.ndarray:
-    """Lấy mảng pixel của một lát cắt, đã áp VOI LUT nếu file có khai báo.
+    """Lấy mảng pixel của một lát cắt ở đơn vị gốc của máy chụp.
 
-    Với MRI thì ``RescaleSlope``/``RescaleIntercept`` gần như luôn là 1/0 và
-    khái niệm Hounsfield không áp dụng — nên bản cũ đặt tên hàm là ``_to_hu`` là
-    sai (lỗi P2-6). Thứ *thực sự* có ý nghĩa cho MRI là VOI LUT / window-center,
-    vốn được import trong bản cũ nhưng không hề gọi.
+    Cố ý **không** áp VOI LUT / window-center. Thẻ ``WindowCenter`` được máy ghi
+    riêng cho từng lát (đo trên dữ liệu thật: 28–63 giá trị khác nhau trong một
+    series), nên áp theo lát làm cùng một mô bị nhân hệ số khác nhau 25–80% giữa
+    các lát kề nhau. Chuẩn hóa percentile theo volume ở bước sau không sửa được
+    sai lệch *giữa* các lát. ``RescaleSlope``/``RescaleIntercept`` là hằng số
+    của cả series nên vẫn được áp.
     """
-    array = dataset.pixel_array
-    if getattr(dataset, "VOILUTSequence", None) or hasattr(dataset, "WindowCenter"):
-        try:
-            array = _apply_voi_lut()(array, dataset)
-        except (ValueError, AttributeError, IndexError) as exc:
-            logger.debug("Bỏ qua VOI LUT (%s), dùng pixel thô.", exc)
-
-    array = np.asarray(array, dtype=np.float32)
+    array = np.asarray(dataset.pixel_array, dtype=np.float32)
     slope = float(getattr(dataset, "RescaleSlope", 1) or 1)
     intercept = float(getattr(dataset, "RescaleIntercept", 0) or 0)
     if slope != 1.0 or intercept != 0.0:

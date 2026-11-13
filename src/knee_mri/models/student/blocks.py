@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 
 class AttentionBlock(nn.Module):
@@ -90,4 +91,39 @@ def sinusoidal_position_embedding(num_positions: int, dim: int) -> Tensor:
     return embedding.unsqueeze(0)
 
 
-__all__ = ["AttentionBlock", "sinusoidal_position_embedding"]
+def sinusoidal_position_embedding_3d(grid: tuple[int, int, int], dim: int) -> Tensor:
+    """Positional embedding sin/cos **tách theo ba trục** của lưới patch.
+
+    Đánh số phẳng 1D khiến hai patch kề nhau theo trục W cách nhau 1 vị trí còn
+    hai patch kề nhau theo trục D cách nhau ``H·W`` vị trí — model phải tự học
+    lại hình học 3D từ dữ liệu vốn đã ít. Ở đây mỗi trục có một khối ``dim//3``
+    chiều riêng, ghép lại và đệm 0 cho phần dư. Hàng đầu là vị trí của token
+    CLS (toàn 0).
+
+    Returns:
+        Tensor ``(1, 1 + D·H·W, dim)``, thứ tự patch khớp ``Conv3d.flatten(2)``.
+    """
+    axis_dim = (dim // 3) // 2 * 2
+    if axis_dim < 2:
+        raise ValueError(f"dim={dim} quá nhỏ để chia cho ba trục.")
+    depth, height, width = grid
+    along_d = sinusoidal_position_embedding(depth, axis_dim)[0][:, None, None, :]
+    along_h = sinusoidal_position_embedding(height, axis_dim)[0][None, :, None, :]
+    along_w = sinusoidal_position_embedding(width, axis_dim)[0][None, None, :, :]
+    patches = torch.cat(
+        [
+            along_d.expand(depth, height, width, -1),
+            along_h.expand(depth, height, width, -1),
+            along_w.expand(depth, height, width, -1),
+        ],
+        dim=-1,
+    )
+    patches = F.pad(patches, (0, dim - 3 * axis_dim)).reshape(depth * height * width, dim)
+    return torch.cat([torch.zeros(1, dim), patches], dim=0).unsqueeze(0)
+
+
+__all__ = [
+    "AttentionBlock",
+    "sinusoidal_position_embedding",
+    "sinusoidal_position_embedding_3d",
+]

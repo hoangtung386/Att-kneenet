@@ -1,6 +1,6 @@
 # Lệnh tắt cho công việc thường ngày. Chạy `make` để xem danh sách.
 .DEFAULT_GOAL := help
-.PHONY: help install lint format test test-fast cov notebooks check smoke clean
+.PHONY: help install lint format typecheck test test-fast cov notebooks check smoke clean
 
 PYTHON ?= python
 ENV    ?= local
@@ -21,6 +21,9 @@ format:  ## Tự sửa lint và định dạng lại code
 	ruff check --fix src tests scripts
 	ruff format src tests scripts
 
+typecheck:  ## Kiểm tra kiểu bằng mypy
+	mypy
+
 test:  ## Chạy toàn bộ test
 	pytest
 
@@ -33,7 +36,7 @@ cov:  ## Chạy test kèm báo cáo độ phủ
 notebooks:  ## Kiểm tra cú pháp mọi cell code trong notebook
 	$(PYTHON) scripts/check_notebooks.py
 
-check: lint test notebooks  ## Chạy đủ bộ kiểm tra như CI
+check: lint typecheck test notebooks  ## Chạy đủ bộ kiểm tra như CI
 
 smoke:  ## Chạy thử pipeline đầu-cuối trên tập nhỏ (không cần GPU)
 	$(PYTHON) scripts/prepare_masks.py          --env $(ENV) --limit 8

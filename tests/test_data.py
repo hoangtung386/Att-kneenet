@@ -89,8 +89,22 @@ class TestVolumeShapeInvariant:
         cropped = build_volume(real_series_dir, cfg.data, mask=center_box_mask(raw.shape, 0.3))
         assert cropped.shape == cfg.data.target_shape
 
-    def test_mismatched_mask_is_ignored_safely(self, real_series_dir, cfg: Config) -> None:
-        """Mask lệch shape thì bỏ qua, không được làm hỏng volume."""
+    def test_mask_at_target_resolution_actually_crops(self, real_series_dir, cfg: Config) -> None:
+        """Lỗi gốc: mask S1 ở ``target_shape`` bị ``roi_crop`` bỏ qua vì lệch shape.
+
+        Volume dựng với mask phải khác volume không mask, nếu không thì bước SAM
+        (hàng chục giờ GPU) không có tác dụng gì với student.
+        """
+        from knee_mri.utils.mask import center_box_mask
+
+        mask = center_box_mask(cfg.data.target_shape, 0.5)
+        with_mask = build_volume(real_series_dir, cfg.data, mask=mask)
+        without_mask = build_volume(real_series_dir, cfg.data)
+        assert with_mask.shape == without_mask.shape == cfg.data.target_shape
+        assert not np.array_equal(with_mask, without_mask)
+
+    def test_full_frame_mask_is_a_noop_on_shape(self, real_series_dir, cfg: Config) -> None:
+        """Mask phủ toàn khung: kết quả vẫn đúng shape mục tiêu."""
         wrong = np.ones((3, 3, 3), dtype=np.uint8)
         assert build_volume(real_series_dir, cfg.data, mask=wrong).shape == cfg.data.target_shape
 
@@ -101,6 +115,41 @@ class TestVolumeShapeInvariant:
 
     def test_empty_volume_matches_target(self, cfg: Config) -> None:
         assert empty_volume(cfg.data).shape == cfg.data.target_shape
+
+
+class TestRoiCrop:
+    """``roi_crop`` phải hoạt động với mask ở độ phân giải bất kỳ."""
+
+    def test_same_resolution(self) -> None:
+        from knee_mri.utils.mask import roi_crop
+
+        volume = np.arange(10 * 20 * 20, dtype=np.float32).reshape(10, 20, 20)
+        mask = np.zeros_like(volume, dtype=np.uint8)
+        mask[2:6, 5:10, 5:10] = 1
+        assert roi_crop(volume, mask, margin=0).shape == (4, 5, 5)
+
+    def test_coarser_mask_is_scaled_to_volume_grid(self) -> None:
+        from knee_mri.utils.mask import roi_crop
+
+        volume = np.zeros((20, 200, 200), dtype=np.float32)
+        mask = np.zeros((10, 100, 100), dtype=np.uint8)
+        mask[2:6, 25:75, 25:75] = 1
+        cropped = roi_crop(volume, mask, margin=0)
+        assert cropped.shape == (8, 100, 100)
+
+    def test_scaled_box_contains_the_original_region(self) -> None:
+        from knee_mri.utils.mask import scale_box
+
+        box = scale_box((slice(1, 2), slice(3, 4), slice(0, 1)), (4, 8, 8), (10, 100, 7))
+        assert all(s.stop > s.start for s in box)
+        assert box[0].start <= 2 and box[0].stop >= 5
+
+    def test_empty_or_missing_mask_returns_volume(self) -> None:
+        from knee_mri.utils.mask import roi_crop
+
+        volume = np.zeros((4, 8, 8), dtype=np.float32)
+        assert roi_crop(volume, None) is volume
+        assert roi_crop(volume, np.zeros((2, 4, 4), dtype=np.uint8)) is volume
 
 
 class TestMiddleSlices:

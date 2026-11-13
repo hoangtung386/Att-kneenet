@@ -183,6 +183,7 @@ def train(argv: Sequence[str] | None = None) -> int:
         cfg,
         use_dummy_teacher=args.smoke,
         use_dummy_guidance=args.smoke,
+        augment=True,
     )
     val_dataset = (
         KneeDataset(
@@ -200,6 +201,40 @@ def train(argv: Sequence[str] | None = None) -> int:
         result.best_metric,
         result.best_checkpoint,
     )
+    return 0
+
+
+def probe(argv: Sequence[str] | None = None) -> int:
+    """Baseline nhanh: hồi quy logistic trên đặc trưng 3DINO đã cache, đo AUC trên gold."""
+    parser = argparse.ArgumentParser(description=probe.__doc__)
+    add_common_arguments(parser)
+    args = parser.parse_args(argv)
+
+    from knee_mri.training.metrics import format_auc_report
+    from knee_mri.training.probe import run_probe
+
+    cfg, catalog, study_uids = prepare(args)
+    report = run_probe(cfg, catalog, study_uids)
+    if report is None:
+        return 1
+    logger.info("Probe trên đặc trưng 3DINO:\n%s", format_auc_report(report))
+    return 0
+
+
+def similarity(argv: Sequence[str] | None = None) -> int:
+    """Đo cosine giữa các vector guidance và đặc trưng teacher đã cache."""
+    parser = argparse.ArgumentParser(description=similarity.__doc__)
+    add_common_arguments(parser)
+    args = parser.parse_args(argv)
+
+    from knee_mri.training.similarity import run_similarity
+
+    cfg, _, _ = prepare(args)
+    reports = run_similarity(cfg)
+    if not reports:
+        return 1
+    for report in reports:
+        logger.info("\n%s", report.format())
     return 0
 
 
@@ -290,6 +325,8 @@ COMMANDS: dict[str, Command] = {
     "teacher-feats": precompute_teacher_feats,
     "guidance": precompute_guidance,
     "train": train,
+    "probe": probe,
+    "similarity": similarity,
     "evaluate": evaluate,
     "predict": predict,
     "explain": explain,

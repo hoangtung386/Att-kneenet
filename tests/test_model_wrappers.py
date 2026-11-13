@@ -53,10 +53,17 @@ class TestDino3DPreprocessing:
         assert with_mask.shape == without.shape
         assert not torch.allclose(with_mask, without)
 
-    def test_missing_repo_gives_actionable_error(self, cfg: Config) -> None:
-        """Thông báo lỗi phải nói rõ cần làm gì, kèm lệnh clone."""
+    def test_missing_repo_gives_actionable_error(self, cfg: Config, tmp_path) -> None:
+        """Thông báo lỗi phải nói rõ cần làm gì, kèm lệnh clone.
+
+        Trỏ tới thư mục tạm chắc chắn không tồn tại, để test không phụ thuộc việc
+        máy này đã clone ``vendor/3DINO`` hay chưa.
+        """
+        from dataclasses import replace
+
+        missing = replace(cfg, paths=replace(cfg.paths, dino_code_dir=tmp_path / "khong-co"))
         with pytest.raises(DinoUnavailableError, match="git clone"):
-            Dino3DTeacher(cfg, device="cpu")._ensure_loaded()
+            Dino3DTeacher(missing, device="cpu")._ensure_loaded()
 
     def test_weights_path_honours_config(self, cfg: Config) -> None:
         """``dino.weight_file`` phải thực sự quyết định đường dẫn weights.

@@ -1,7 +1,8 @@
 """Student ViT-3D — model **chỉ dùng ảnh**, là thứ duy nhất chạy lúc inference.
 
 Nhận volume ``(B, 1, D, H, W)``, patchify bằng convolution 3D, cho qua chồng
-:class:`~knee_mri.models.student.blocks.AttentionBlock`, xuất đặc trưng CLS.
+:class:`~knee_mri.models.student.blocks.AttentionBlock`, xuất đặc trưng mức volume
+(token CLS hoặc trung bình patch).
 
 Điểm sửa so với bản cũ: ``pos_embed`` được cấp phát **một lần trong ``__init__``**
 với số patch suy ra từ cấu hình. Bản cũ tạo lại ``nn.Parameter`` ngay trong
@@ -18,7 +19,7 @@ import torch
 from torch import Tensor, nn
 
 from knee_mri.config.schema import Config
-from knee_mri.models.student.blocks import AttentionBlock, sinusoidal_position_embedding
+from knee_mri.models.student.blocks import AttentionBlock, sinusoidal_position_embedding_3d
 
 
 def grid_size(
@@ -52,6 +53,7 @@ class ViT3DStudent(nn.Module):
         self.volume_shape = cfg.data.target_shape
         self.grid = grid_size(self.volume_shape, self.patch_size)
         self.dim = cfg.model.student_dim
+        self.pooling = cfg.model.pooling
 
         num_patches = math.prod(self.grid)
         self.num_patches = num_patches
@@ -63,7 +65,7 @@ class ViT3DStudent(nn.Module):
             stride=self.patch_size,
         )
         self.cls_token = nn.Parameter(torch.zeros(1, 1, self.dim))
-        self.pos_embed = nn.Parameter(sinusoidal_position_embedding(num_patches + 1, self.dim))
+        self.pos_embed = nn.Parameter(sinusoidal_position_embedding_3d(self.grid, self.dim))
         self.dropout = nn.Dropout(cfg.model.student_dropout)
         self.blocks = nn.ModuleList(
             AttentionBlock(
@@ -90,14 +92,15 @@ class ViT3DStudent(nn.Module):
             nn.init.zeros_(module.bias)
 
     def forward(self, volume: Tensor, *, return_attn: bool = False) -> tuple[Tensor, list[Tensor]]:
-        """Trích đặc trưng CLS từ volume.
+        """Trích đặc trưng mức volume.
 
         Args:
             volume: Tensor ``(B, 1, D, H, W)`` khớp ``cfg.data.target_shape``.
             return_attn: Trả kèm attention của từng khối (cho CAM).
 
         Returns:
-            ``(cls_feature, attentions)`` — ``cls_feature`` shape ``(B, dim)``;
+            ``(feature, attentions)`` — ``feature`` shape ``(B, dim)``, lấy từ token
+            CLS hoặc trung bình các patch tùy ``model.pooling``;
             ``attentions`` là list rỗng khi ``return_attn=False``.
         """
         if volume.shape[-3:] != self.volume_shape:
@@ -118,7 +121,8 @@ class ViT3DStudent(nn.Module):
             if return_attn and weights is not None:
                 attentions.append(weights)
 
-        return self.norm(tokens[:, 0]), attentions
+        pooled = tokens[:, 0] if self.pooling == "cls" else tokens[:, 1:].mean(dim=1)
+        return self.norm(pooled), attentions
 
     def extra_repr(self) -> str:
         return (

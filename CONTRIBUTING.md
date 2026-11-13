@@ -33,7 +33,7 @@ Không ép được bằng máy, nhưng vẫn là quy ước của repo:
 - Khi sửa một quyết định thiết kế cũ, ghi lại lý do ngay tại chỗ để người sau
   không "sửa ngược" lại.
 
-## 3. Tám bất biến không được phá
+## 3. Mười một bất biến không được phá
 
 Mỗi mục dưới đây từng là một lỗi thật trong repo này. Mỗi mục đều có test khóa lại.
 Nếu bạn thấy mình đang định vi phạm một trong số này, gần như chắc chắn có cách khác.
@@ -48,8 +48,11 @@ Nếu bạn thấy mình đang định vi phạm một trong số này, gần nh
 | 6 | `torch.load` luôn có `weights_only=True` | `test_pipeline_smoke.py::TestCheckpointRoundTrip` |
 | 7 | Notebook không định nghĩa hàm hay lớp | rà bằng mắt khi review |
 | 8 | Ảnh qua `to_unit_range()` trước khi vào SAM/VLM | `test_normalize.py`, `test_model_wrappers.py` |
+| 9 | Mask ROI ở độ phân giải bất kỳ vẫn phải **thực sự cắt** volume (không bỏ qua im lặng khi lệch shape) | `test_data.py::TestVolumeShapeInvariant`, `TestRoiCrop` |
+| 10 | Pixel DICOM không qua windowing theo lát; lát sắp theo pháp tuyến mặt phẳng | `test_dicom_io.py` |
+| 11 | Mặc định loss: BCE, `contrast` = 0 cho tới khi có bằng chứng nó giúp ích | `test_config.py::TestRefactoredDefaults` |
 
-Bối cảnh đầy đủ của từng lỗi nằm ở [docs/refactor_guide.md](docs/refactor_guide.md).
+Bối cảnh của từng mã lỗi (`P0-6`, `P2-5`...) nằm ở [docs/bug_ledger.md](docs/bug_ledger.md).
 
 ### Vì sao bất biến #1 quan trọng nhất
 
@@ -82,7 +85,7 @@ chép lúc import và mọi ghi đè sau đó bị nuốt im lặng. Luôn truy�
   chứ không `test_asl`.
 - Sửa một lỗi thì viết test làm lỗi đó tái hiện **trước**, rồi mới sửa.
 
-Độ phủ hiện tại ~80%. Phần thiếu chủ yếu là các nhánh cần GPU và weights đã tải
+Độ phủ hiện tại ~83%. Phần thiếu chủ yếu là các nhánh cần GPU và weights đã tải
 (`teachers/`, `report_generator`, `pipeline/features`) — logic thuần quanh chúng
 vẫn phải có test, xem `tests/test_model_wrappers.py`.
 
@@ -119,6 +122,9 @@ Trong phần mô tả PR, nêu rõ:
   để không lẫn file `.npy` lệch chiều rồi vỡ giữa lúc huấn luyện.
 - **`vendor/3DINO`** mang license CC BY-NC-ND: chỉ nghiên cứu phi thương mại và
   **không được sửa** code trong đó.
-- **Loss AUC-margin** cần mỗi batch có cả mẫu dương lẫn mẫu âm cho ít nhất một
-  nhãn. Với tỉ lệ dương ~1–2% và batch nhỏ, phần lớn batch sẽ không thỏa. Tăng
-  `train.batch_size` hoặc thêm sampler cân bằng nếu muốn loss này thực sự hoạt động.
+- **InfoNCE** (`train.loss.contrast`) với batch nhỏ chỉ có vài mẫu âm. Memory bank
+  (`train.memory_bank_size`, `training/memory_bank.py`) bổ sung mẫu âm bằng guidance của
+  các study trước; nó **không** được lưu trong checkpoint nên đầy lại sau vài trăm bước.
+  Bank chỉ hoạt động khi `contrast > 0`. Chưa có bằng chứng loss này giúp ích: chạy
+  `scripts/similarity.py` trước, nếu guidance giống nhau quá (cosine > 0.95) thì bật nó
+  cũng vô ích.

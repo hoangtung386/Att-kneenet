@@ -55,6 +55,13 @@ Bản trước refactor đi đường vòng float → `uint8` → `PIL.Image.res
 Nay `resize_volume` nội suy trilinear thẳng trên float32, cài bằng numpy thuần
 nên lớp dữ liệu không phụ thuộc PyTorch và test chạy được không cần GPU.
 
+### Pixel đầu vào: không windowing theo lát
+
+`slice_pixels` chỉ áp `RescaleSlope/Intercept` (hằng số của series) và đảo
+MONOCHROME1. VOI LUT theo lát bị bỏ vì `WindowCenter` khác nhau giữa các lát cùng series
+làm lệch cường độ 25–80% (gần 2× ở series 3D), mà chuẩn hóa percentile theo volume
+không sửa được sai lệch giữa các lát.
+
 ### Thứ tự: crop ROI → resize → chuẩn hóa
 
 - **Crop trước resize:** độ phân giải hiệu dụng dồn vào vùng bệnh lý thay vì nền đen.
