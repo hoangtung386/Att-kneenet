@@ -1,6 +1,6 @@
 # Kiến trúc — RSNA Knee Abnormality Detection
 
-> Khôi phục và cập nhật từ `pipeline_version_1.md` sau đợt refactor.
+> Cập nhật sau đợt refactor lần hai theo [root_cause_analysis.md](root_cause_analysis.md).
 > Tên module trong tài liệu này trỏ tới cây `src/knee_mri/` hiện hành.
 
 ## Thông tin then chốt từ dataset
@@ -59,10 +59,10 @@ flowchart TD
         Rep --> VLM2
         VLM2 -->|Guidance G| X(("⊗"))
         DINO -->|Đặc trưng ảnh| X
-        Stu["Student ViT-3D (CHỈ ẢNH)"] -->|KD ảnh + InfoNCE text| X
+        Stu["Student ViT-3D (CHỈ ẢNH)"] -->|KD ảnh + InfoNCE text (tùy chọn)| X
         X --> LossD["KD + Contrastive"]
         Stu -->|logits| CLS["Classifier Head (+metadata)"]
-        CLS -->|ASL + AUC margin| LossC["CLS Loss"]
+        CLS -->|BCE hoặc ASL| LossC["CLS Loss"]
     end
     SaveMask -.->|ROI crop| DINO
     Meta[(Metadata series)] --> CLS
@@ -95,24 +95,32 @@ trên CPU) và VLM (`labeling/llm_based.py`, cần GPU). Cả hai đều là bư
 
 - **Teacher ảnh:** 3DINO-ViT encode volume 3D → vector 1024 chiều
   (`models/teachers/dino3d.py`), cache tại `artifacts/teacher_feats/`.
-- **Teacher text:** VLM đa modality encode (lát cắt giữa + report) → guidance `G`
+- **Teacher text:** VLM encode report (tùy chọn kèm lát cắt giữa, `vlm.guidance_use_images`) → guidance `G`
   (`models/teachers/gemma_guidance.py`), cache tại `artifacts/guidance/`.
-- **Student:** ViT-3D nhận volume đã ROI-crop, xuất đặc trưng CLS
+- **Student:** ViT-3D nhận volume đã ROI-crop (mask ở độ phân giải bất kỳ đều
+  áp được lên DICOM thô), xuất đặc trưng mức volume: trung bình patch (mặc định,
+  `model.pooling: mean`) hoặc token CLS. Positional embedding tách theo ba trục D/H/W.
   (`models/student/vit3d.py`).
-- **Loss** (`training/losses.py`):
+- **Loss** (`training/losses.py`), trọng số trong `train.loss` (0 = tắt):
 
   ```
-  L = λ_kd  · cosine(proj_img(feat), 3DINO)
-    + λ_ctr · InfoNCE(img_embed, text_embed)
-    + λ_cls · AsymmetricLoss(logits, weak_label)
-    + λ_auc · AUCMargin(logits, weak_label)
+  L = λ_kd  · cosine(proj_img(feat), 3DINO)          # mặc định 1.0
+    + λ_cls · BCE(logits, weak_label)                # mặc định 1.0 (hoặc ASL)
+    + λ_ctr · InfoNCE(img_embed, text_embed)         # mặc định 0.0
+    + λ_auc · AUCMargin(logits, weak_label)          # mặc định 0.0
   ```
+
+  InfoNCE tắt vì với batch 8 loss ngẫu nhiên là log 8 ≈ 2.08 và không truyền được tri
+  thức; chỉ bật khi batch ≥ 128. AUC-margin tắt vì khi logit chưa tách nó đứng yên ở ≈ 1.0.
+  Xem `docs/root_cause_analysis.md` §4.
 
 - Student **không bao giờ** thấy text lúc forward; text chỉ tạo mục tiêu KD.
 
 ### S3 — CAM và báo cáo
 
-- CAM bằng attention rollout của student (`explain/cam.py`).
+- CAM bằng attention rollout của student (`explain/cam.py`). Rollout đọc attention
+  của token **CLS**; với `model.pooling: mean` classifier không dùng CLS nên CAM
+  chỉ là gần đúng. Đặt `model.pooling: cls` nếu cần CAM trung thực.
 - Đối chiếu CAM với mask S1 bằng IoU/Dice (`explain/overlay.py`) để kiểm chứng
   student "nhìn" đúng vùng giải phẫu.
 - VLM sinh báo cáo bằng lời từ vector xác suất (`models/report_generator.py`),
@@ -133,11 +141,13 @@ Cài đặt tại `inference/predictor.py`.
 
 - **License 3DINO-ViT:** CC BY-NC-ND — chỉ nghiên cứu phi thương mại, clone
   nguyên gốc vào `vendor/3DINO` và **không sửa** code trong đó.
-- **Nhãn cực thưa** (~1–2% dương tính mỗi nhãn) → ưu tiên AUC; dùng Asymmetric
-  Loss thay cho BCE thường.
+- **Nhãn mất cân bằng vừa phải** (8–39% dương tính mỗi nhãn theo luật từ khóa, 16–60%
+  trên 58 study gold) → ưu tiên AUC; dùng BCE làm mặc định.
+  Asymmetric Loss vẫn chọn được bằng `train.cls_loss: asl`, nhưng nó thiết kế cho nhãn
+  dương ~1% và hạ trọng số mẫu âm quá tay ở dữ liệu này.
 - **58 study có nhãn gold** được giữ làm **validation cố định** (`data/splits.py`).
   Quá ít để huấn luyện, nhưng là tín hiệu duy nhất về metric thật.
 - **Model ID của VLM** khai báo tại `configs/base.yaml` (`vlm.model_id`) — đây là
   nguồn sự thật duy nhất. Xác minh model tồn tại trên HF Hub trước khi chạy dài.
 - **Bất biến shape:** mọi volume có shape `cfg.data.target_shape`. Xem
-  `docs/refactor_guide.md` §6.3 để biết vì sao đây là điều kiện sống còn.
+  `CONTRIBUTING.md` §3 để biết vì sao đây là điều kiện sống còn.

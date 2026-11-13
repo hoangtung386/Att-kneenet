@@ -58,6 +58,7 @@ python scripts/prepare_masks.py           --env colab   # S1: mask ROI (SAM)
 python scripts/precompute_weak_labels.py  --env colab --use-vlm
 python scripts/precompute_teacher_feats.py --env colab  # 3DINO-ViT
 python scripts/precompute_guidance.py     --env colab   # guidance từ VLM
+python scripts/probe.py                   --env colab   # baseline nhanh trên đặc trưng 3DINO
 python scripts/train.py                   --env colab   # S2: KD
 python scripts/evaluate.py                --env colab   # AUC trên 58 nhãn gold
 python scripts/explain.py                 --env colab   # S3: CAM + báo cáo
@@ -68,6 +69,15 @@ Hoặc mở [`notebooks/02_colab_train.ipynb`](notebooks/02_colab_train.ipynb).
 
 Mọi lệnh cũng gọi được qua `python -m knee_mri.cli <lệnh>`, hoặc như entrypoint
 đã cài (`knee-train`, `knee-predict`, ...).
+
+## Chẩn đoán kết quả thấp
+
+AUC ≈ 0.5 thường là model chưa học, không phải học sai. Đọc
+[docs/root_cause_analysis.md](docs/root_cause_analysis.md) trước khi chạy lại. Chạy
+`scripts/probe.py` sau `precompute_teacher_feats.py` để biết nhãn và đặc trưng 3DINO
+có đủ tốt không, trước khi tốn giờ GPU huấn luyện student.
+
+> Checkpoint cũ huấn luyện với token CLS: đặt `--set model.pooling=cls` khi nạp lại.
 
 ## Cấu hình
 
@@ -99,10 +109,10 @@ cfg.paths.ensure()
 
 ```
 configs/                 # cấu hình YAML theo môi trường
-docs/                    # kiến trúc, ghi chú dữ liệu, chuẩn hóa, hướng dẫn refactor
-notebooks/               # 01 phân tích dữ liệu · 02 huấn luyện Colab · 03 trực quan hóa
+docs/                    # kiến trúc, dữ liệu, chuẩn hóa, phân tích nguyên nhân, sổ mã lỗi
+notebooks/               # 01 phân tích dữ liệu · 02 huấn luyện Colab · 03 trực quan hóa · 04 nộp Kaggle
 scripts/                 # entrypoint CLI mỏng, mỗi file một bước
-tests/                   # 247 test, chạy được không cần GPU
+tests/                   # 308 test, chạy được không cần GPU
 src/knee_mri/
   config/                # schema dataclass + loader YAML
   constants.py           # LABELS, tên cột CSV — hằng số của đề bài
@@ -127,9 +137,9 @@ make smoke          # chạy pipeline đầu-cuối trên tập nhỏ, không c�
 | Cổng | Trạng thái |
 |---|---|
 | `ruff check` + `ruff format` | sạch |
-| `mypy` (49 file) | không lỗi |
-| `pytest` | 247 test |
-| Độ phủ | 80% |
+| `mypy` (55 file) | không lỗi |
+| `pytest` | 308 test |
+| Độ phủ | ~83% |
 
 Test khóa lại **từng** lỗi đã sửa trong đợt refactor, nên chúng không thể tái
 phát một cách âm thầm. Các nhánh cần GPU và weights đã tải (`teachers/`,
@@ -142,9 +152,10 @@ test — xem `tests/test_model_wrappers.py`.
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Sơ đồ pipeline S1 → S2 → S3, chi tiết từng bước |
 | [docs/data_notes.md](docs/data_notes.md) | Quy mô dataset, nhãn thưa, report đa ngôn ngữ, chất lượng weak label |
+| [docs/root_cause_analysis.md](docs/root_cause_analysis.md) | Vì sao AUC ≈ 0.5: bằng chứng và thứ tự sửa |
 | [docs/normalization.md](docs/normalization.md) | Vì sao chọn `volume_percentile_pm1` |
-| [docs/refactor_guide.md](docs/refactor_guide.md) | Review đầy đủ bản cũ và kế hoạch refactor đã thực hiện |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Quy ước code, tám bất biến, cách viết test, chỗ dễ vấp |
+| [docs/bug_ledger.md](docs/bug_ledger.md) | Tra cứu các mã lỗi `P0-x`…`P3-x` trong docstring và test |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Quy ước code, mười một bất biến, cách viết test, chỗ dễ vấp |
 
 ## Bất biến cần giữ
 

@@ -13,32 +13,35 @@ Số liệu dưới đây đo trực tiếp trên `dataset/` bằng `StudyCatalo
 | Study có nhãn cấu trúc | **58** (1.3%) |
 | Series trung bình / study | ~5.5 |
 
-## Nhãn cực thưa
+## Phân bố nhãn
 
-Số study dương tính trên **58 study có nhãn gold**:
+Tiền đề cũ "nhãn cực thưa, ~1–2% dương tính" là **sai**. Đo trực tiếp:
 
-| Nhãn | Dương tính |
-|---|---|
-| Effusion | 35 |
-| Synovitis | 27 |
-| Medial Meniscus | 26 |
-| ACL | 23 |
-| Lateral Meniscus | 23 |
-| PF OA | 21 |
-| Contusion | 19 |
-| Fracture | 18 |
-| Medial OA | 15 |
-| Baker's | 12 |
-| Lateral OA | 11 |
-| MCL | 9 |
+| Nhãn | Weak label (luật, 4407 study) | Gold (58 study) | Dương gold |
+|---|---|---|---|
+| Effusion | 36% | 60% | 35 |
+| Synovitis | 10% | 47% | 27 |
+| Medial Meniscus | 39% | 45% | 26 |
+| ACL | 26% | 41% | 23 |
+| Lateral Meniscus | 28% | 40% | 23 |
+| PF OA | 17% | 36% | 21 |
+| Contusion | 17% | 33% | 19 |
+| Fracture | 8% | 31% | 18 |
+| Medial OA | 16% | 26% | 15 |
+| Baker's | 20% | 21% | 12 |
+| Lateral OA | 13% | 19% | 11 |
+| MCL | 22% | 16% | 9 |
+
+Trung bình 2.5 nhãn dương mỗi study; 31% study không có nhãn dương nào.
 
 Hệ quả thiết kế:
 
-- Dùng **Asymmetric Loss** thay BCE — hạ trọng số mẫu âm dễ để gradient dồn vào
-  mẫu dương hiếm.
-- Metric là **AUC**, không phải accuracy: đoán "âm" cho mọi thứ đã cho accuracy
-  rất cao mà vô dụng.
-- 58 study này là **validation**, không dùng để huấn luyện (`data/splits.py`).
+- Dùng **BCE** làm loss phân loại mặc định. Asymmetric Loss (`gamma_neg = 4`) thiết kế
+  cho nhãn dương ~1% và hạ trọng số mẫu âm quá tay ở đây; vẫn chọn được bằng `train.cls_loss`.
+- Metric là **AUC**, không phải accuracy.
+- 58 study gold là **validation**, không dùng để huấn luyện (`data/splits.py`). Chúng
+  nặng bệnh hơn tập train (Synovitis 47% so với 10%), nên AUC trên gold đo một phân bố
+  hơi khác với phân bố huấn luyện và nhiễu mạnh (9–35 dương mỗi nhãn).
 
 ## Report đa ngôn ngữ
 
@@ -101,7 +104,13 @@ dịch làm nổi tràn dịch và phù tủy xương.
 ## Đặc điểm DICOM
 
 - Đuôi file: `.dcm`; mỗi series có khoảng 20–40 lát.
-- Độ phân giải điển hình: 512×512, đôi khi lẫn nhiều độ phân giải trong một
-  series (`dicom_io.read_series` giữ nhóm shape phổ biến nhất).
-- Sắp xếp lát theo `ImagePositionPatient[2]`, dự phòng bằng `InstanceNumber`.
+- Độ phân giải điển hình: 512×512, nhưng đo thực tế có 512–960 px, pixel spacing
+  0.16–0.35 mm, 24–40 lát dày 3–4 mm (có series 3D 160 lát); đôi khi lẫn nhiều độ
+  phân giải trong một series (`dicom_io.read_series` giữ nhóm shape phổ biến nhất).
+- Sắp xếp lát theo tọa độ chiếu lên **pháp tuyến mặt phẳng lát** (tích có hướng của
+  `ImageOrientationPatient`, dấu cố định theo trục trội), dự phòng bằng
+  `InstanceNumber`. Không dùng riêng `ImagePositionPatient[2]`: với sagittal/coronal
+  các lát trải dọc trục x/y, z gần như hằng.
+- **Không** áp VOI LUT/WindowCenter: máy ghi giá trị khác nhau cho từng lát (28–63 giá
+  trị trong một series), làm cùng một mô lệch 25–80% giữa các lát.
 - MRI **không** có thang đo tuyệt đối — xem `docs/normalization.md`.
