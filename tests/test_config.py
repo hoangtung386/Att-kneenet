@@ -100,8 +100,13 @@ class TestRefactoredDefaults:
 
     def test_unreliable_loss_branches_are_off_by_default(self) -> None:
         weights = load_config("test").train.loss
-        assert weights.contrast == 0.0 and weights.auc == 0.0
+        assert weights.contrast == 0.0
         assert weights.cls > 0.0 and weights.kd > 0.0
+
+    def test_memory_bank_size_must_not_be_negative(self) -> None:
+        assert load_config("test").train.memory_bank_size >= 0
+        with pytest.raises(ConfigError):
+            load_config("test", overrides={"train": {"memory_bank_size": -1}})
 
     def test_unknown_cls_loss_is_rejected(self) -> None:
         with pytest.raises(ConfigError):

@@ -1,12 +1,12 @@
 """Vòng huấn luyện student bằng text-guided knowledge distillation.
 
-Student (ViT-3D, **chỉ ảnh**) học tối đa bốn mục tiêu, mỗi mục có trọng số
+Student (ViT-3D, **chỉ ảnh**) học tối đa ba mục tiêu, mỗi mục có trọng số
 riêng trong ``train.loss`` (trọng số 0 nghĩa là tắt):
 
 1. Phân loại 12 nhãn yếu (BCE mặc định, hoặc Asymmetric Loss).
 2. Bắt chước đặc trưng ảnh của 3DINO-ViT (KD).
-3. Căn chỉnh với guidance text của VLM qua InfoNCE. Chỉ bật khi batch đủ lớn.
-4. Tối ưu thứ hạng bằng AUC-margin.
+3. Căn chỉnh với guidance text của VLM qua InfoNCE, với memory bank cung cấp
+   thêm mẫu âm (``train.memory_bank_size``). Mặc định tắt.
 
 Những gì bản cũ thiếu và nay đã có: mixed precision, gradient clipping, LR
 scheduler có warmup, vòng validation đo AUC trên 58 study nhãn gold, theo dõi
@@ -40,11 +40,11 @@ from knee_mri.training.checkpoint import (
 )
 from knee_mri.training.losses import (
     asymmetric_loss,
-    auc_margin_loss,
     bce_loss,
     info_nce,
     kd_cosine_loss,
 )
+from knee_mri.training.memory_bank import GuidanceBank
 from knee_mri.training.metrics import AucReport, format_auc_report, macro_auc
 from knee_mri.utils.logging import get_logger
 
@@ -64,7 +64,6 @@ class EpochStats:
     kd: float = 0.0
     contrast: float = 0.0
     cls: float = 0.0
-    auc: float = 0.0
     steps: int = 0
 
     def update(self, **values: float) -> None:
@@ -74,10 +73,7 @@ class EpochStats:
 
     def averaged(self) -> dict[str, float]:
         divisor = max(self.steps, 1)
-        return {
-            name: getattr(self, name) / divisor
-            for name in ("total", "kd", "contrast", "cls", "auc")
-        }
+        return {name: getattr(self, name) / divisor for name in ("total", "kd", "contrast", "cls")}
 
     def format(self) -> str:
         values = self.averaged()
@@ -204,6 +200,13 @@ def _autocast(cfg: Config, device: str):
     return torch.autocast(device_type="cuda" if enabled else "cpu", dtype=dtype, enabled=enabled)
 
 
+def _make_bank(cfg: Config, device: str) -> GuidanceBank | None:
+    """Tạo memory bank khi InfoNCE đang bật và ``memory_bank_size > 0``."""
+    if cfg.train.loss.contrast <= 0 or cfg.train.memory_bank_size <= 0:
+        return None
+    return GuidanceBank(cfg.train.memory_bank_size, cfg.model.guidance_dim, device)
+
+
 def classification_loss(logits: Tensor, targets: Tensor, cfg: Config) -> Tensor:
     """Loss phân loại theo ``train.cls_loss`` (``bce`` hoặc ``asl``)."""
     if cfg.train.cls_loss == "asl":
@@ -218,9 +221,17 @@ def classification_loss(logits: Tensor, targets: Tensor, cfg: Config) -> Tensor:
 
 
 def compute_losses(
-    bundle: TrainingBundle, batch: KneeBatch, cfg: Config, device: str
+    bundle: TrainingBundle,
+    batch: KneeBatch,
+    cfg: Config,
+    device: str,
+    bank: GuidanceBank | None = None,
 ) -> tuple[Tensor, dict[str, float]]:
-    """Tính tổng loss và các thành phần cho một batch."""
+    """Tính tổng loss và các thành phần cho một batch.
+
+    Nếu có ``bank``, InfoNCE dùng thêm guidance của các study trước làm mẫu âm,
+    rồi bank được cập nhật bằng batch hiện tại (sau khi tính loss).
+    """
     volumes = batch["volumes"].to(device, non_blocking=True)
     teacher_feats = batch["teacher_feats"].to(device, non_blocking=True)
     guidance = batch["guidance"].to(device, non_blocking=True)
@@ -235,26 +246,32 @@ def compute_losses(
     study_features = pool_per_study(features, counts)
     image_embedding = bundle.image_contrast(study_features)
     text_embedding = bundle.text_contrast(guidance)
-    loss_contrast = info_nce(image_embedding, text_embedding, temperature=cfg.train.temp)
+    negative_text = negative_valid = None
+    if bank is not None and len(bank) > 0:
+        bank_vectors, negative_valid = bank.sample(batch["study_uids"])
+        with torch.no_grad():
+            negative_text = bundle.text_contrast(bank_vectors)
+    loss_contrast = info_nce(
+        image_embedding,
+        text_embedding,
+        temperature=cfg.train.temp,
+        negative_text=negative_text,
+        negative_valid=negative_valid,
+    )
+    if bank is not None:
+        bank.push(guidance, batch["study_uids"])
 
     logits = bundle.classifier(features, metadata)
     study_logits = pool_per_study(logits, counts)
     loss_cls = classification_loss(study_logits, weak_labels, cfg)
-    loss_auc = auc_margin_loss(study_logits, weak_labels, margin=cfg.train.auc_margin)
 
     weights = cfg.train.loss
-    total = (
-        weights.kd * loss_kd
-        + weights.contrast * loss_contrast
-        + weights.cls * loss_cls
-        + weights.auc * loss_auc
-    )
+    total = weights.kd * loss_kd + weights.contrast * loss_contrast + weights.cls * loss_cls
     components = {
         "total": float(total.detach()),
         "kd": float(loss_kd.detach()),
         "contrast": float(loss_contrast.detach()),
         "cls": float(loss_cls.detach()),
-        "auc": float(loss_auc.detach()),
     }
     return total, components
 
@@ -316,6 +333,7 @@ def train(
 
     bundle = build_bundle(cfg).to(device)
     train_loader = make_loader(train_dataset, cfg, shuffle=True)
+    bank = _make_bank(cfg, device)
     val_loader = make_loader(val_dataset, cfg, shuffle=False) if val_dataset else None
 
     optimizer = build_optimizer(bundle, cfg)
@@ -352,7 +370,7 @@ def train(
         for step, batch in enumerate(train_loader):
             optimizer.zero_grad(set_to_none=True)
             with _autocast(cfg, device):
-                loss, components = compute_losses(bundle, batch, cfg, device)
+                loss, components = compute_losses(bundle, batch, cfg, device, bank)
 
             scaler.scale(loss).backward()
             if cfg.train.grad_clip > 0:

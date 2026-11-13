@@ -92,7 +92,7 @@ class TestTrainingStep:
 
         loss, components = compute_losses(bundle, batch, cfg, "cpu")
         assert torch.isfinite(loss)
-        assert set(components) == {"total", "kd", "contrast", "cls", "auc"}
+        assert set(components) == {"total", "kd", "contrast", "cls"}
         assert all(np.isfinite(value) for value in components.values())
 
         optimizer.zero_grad()
@@ -110,6 +110,23 @@ class TestTrainingStep:
         assert components["kd"] > 0
         assert components["contrast"] > 0
         assert components["cls"] > 0
+
+    def test_memory_bank_is_filled_and_used(self, cfg: Config, small_dataset: KneeDataset) -> None:
+        """Bước 1 nạp bank; bước 2 dùng nó làm mẫu âm mà vẫn ra loss hữu hạn."""
+        from knee_mri.training.memory_bank import GuidanceBank
+
+        bundle = build_bundle(cfg)
+        bank = GuidanceBank(8, cfg.model.guidance_dim)
+        first = collate_studies([small_dataset[0]])
+        second = collate_studies([small_dataset[1]])
+
+        _, before = compute_losses(bundle, first, cfg, "cpu", bank)
+        assert len(bank) == 1
+        loss, after = compute_losses(bundle, second, cfg, "cpu", bank)
+        assert len(bank) == 2
+        assert torch.isfinite(loss) and np.isfinite(after["contrast"])
+        assert before["contrast"] == 0.0  # batch 1 + bank rỗng: không có cặp âm
+        assert after["contrast"] > 0.0
 
 
 class TestCheckpointRoundTrip:

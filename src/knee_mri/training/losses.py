@@ -2,18 +2,17 @@
 
 Bối cảnh: chỉ 58/4407 study có nhãn do người gán, nhưng **mọi** study đều có
 report. Chiến lược là bóc tri thức từ 4407 cặp (ảnh, report) thay vì chỉ dựa vào
-58 nhãn. Năm thành phần:
+58 nhãn. Bốn thành phần:
 
 1. :func:`bce_loss` — phân loại 12 nhãn trên nhãn yếu. Mặc định, vì nhãn chỉ
    mất cân bằng vừa phải (xem ``docs/data_notes.md``).
 2. :func:`kd_cosine_loss` — giữ đặc trưng ảnh mạnh từ 3DINO-ViT.
 3. :func:`asymmetric_loss` — lựa chọn cho nhãn *thực sự* cực thưa (~1%).
-4. :func:`info_nce` — căn chỉnh ảnh với guidance text. Chỉ có nghĩa khi batch
-   lớn; mặc định tắt (trọng số 0).
-5. :func:`auc_margin_loss` — tối ưu thứ hạng; chỉ hữu ích khi logit đã tách,
-   nên mặc định tắt.
+4. :func:`info_nce` — căn chỉnh ảnh với guidance text. Cần nhiều mẫu âm: với
+   batch nhỏ phải kèm memory bank (``training/memory_bank.py``). Mặc định tắt
+   (trọng số 0).
 
-Tổng: ``L = λ_kd·L_kd + λ_cls·L_cls + λ_ctr·L_infonce + λ_auc·L_auc``.
+Tổng: ``L = λ_kd·L_kd + λ_cls·L_cls + λ_ctr·L_infonce``.
 """
 
 from __future__ import annotations
@@ -26,26 +25,49 @@ _EPS: float = 1e-8
 
 
 def info_nce(
-    image_embedding: Tensor, text_embedding: Tensor, *, temperature: float = 0.07
+    image_embedding: Tensor,
+    text_embedding: Tensor,
+    *,
+    temperature: float = 0.07,
+    negative_text: Tensor | None = None,
+    negative_valid: Tensor | None = None,
 ) -> Tensor:
-    """InfoNCE đối xứng giữa đặc trưng ảnh và guidance text.
+    """InfoNCE giữa đặc trưng ảnh và guidance text.
 
     Mỗi study trong batch là một cặp dương; các study còn lại là cặp âm. Với
     batch ``B`` thì loss của model ngẫu nhiên là ``log(B)``: ở ``B = 8`` loss
-    dậm chân quanh 2.08 và không truyền được tri thức. Cần batch hàng trăm
-    (hoặc memory bank) thì loss này mới có nghĩa.
+    dậm chân quanh 2.08 và không truyền được tri thức.
+
+    Để có nhiều mẫu âm mà không tăng batch, truyền thêm ``negative_text`` (từ
+    :class:`~knee_mri.training.memory_bank.GuidanceBank`). Khi đó chiều
+    ảnh → text so mỗi ảnh với ``B + K`` text; chiều text → ảnh vẫn chỉ trong
+    batch, vì ``K`` embedding ảnh cũ sẽ lỗi thời (student đã đổi).
 
     Args:
         image_embedding: ``(B, D)`` đã L2-normalize.
         text_embedding: ``(B, D)`` đã L2-normalize.
         temperature: Nhiệt độ softmax; nhỏ hơn = phân biệt gắt hơn.
+        negative_text: ``(K, D)`` đã L2-normalize, không gradient, hoặc ``None``.
+        negative_valid: ``(B, K)`` bool, ``False`` ở chỗ phải bỏ qua (ví dụ chính
+            study đó nằm trong bank). ``None`` nghĩa là mọi chỗ hợp lệ.
     """
-    if image_embedding.shape[0] < 2:
-        # Một mẫu thì không có cặp âm nào; trả về 0 nhưng vẫn giữ đồ thị gradient.
+    has_bank = negative_text is not None and negative_text.shape[0] > 0
+    if image_embedding.shape[0] < 2 and not has_bank:
+        # Không có cặp âm nào; trả về 0 nhưng vẫn giữ đồ thị gradient.
         return image_embedding.sum() * 0.0
     logits = image_embedding @ text_embedding.t() / temperature
     targets = torch.arange(logits.shape[0], device=logits.device)
-    return (F.cross_entropy(logits, targets) + F.cross_entropy(logits.t(), targets)) / 2
+    if not has_bank:
+        return (F.cross_entropy(logits, targets) + F.cross_entropy(logits.t(), targets)) / 2
+
+    assert negative_text is not None
+    bank_logits = image_embedding @ negative_text.detach().t() / temperature
+    if negative_valid is not None:
+        bank_logits = bank_logits.masked_fill(~negative_valid, float("-inf"))
+    image_to_text = F.cross_entropy(torch.cat([logits, bank_logits], dim=1), targets)
+    if logits.shape[0] < 2:
+        return image_to_text
+    return (image_to_text + F.cross_entropy(logits.t(), targets)) / 2
 
 
 def bce_loss(logits: Tensor, targets: Tensor, *, pos_weight: Tensor | None = None) -> Tensor:
@@ -107,36 +129,6 @@ def asymmetric_loss(
     return -(loss_pos + loss_neg).sum(dim=1).mean()
 
 
-def auc_margin_loss(logits: Tensor, targets: Tensor, *, margin: float = 1.0) -> Tensor:
-    """Hinge theo cặp, thay thế khả vi cho AUC — metric chính của cuộc thi.
-
-    Với mỗi nhãn, đẩy điểm của mọi mẫu dương cao hơn mọi mẫu âm ít nhất
-    ``margin``. Nhãn nào không có đủ cả hai loại trong batch thì bỏ qua.
-
-    Luôn trả về ``Tensor`` gắn với đồ thị tính toán, kể cả khi không nhãn nào đủ
-    điều kiện. Bản cũ khởi tạo ``total = 0.0`` (float Python) nên trong trường
-    hợp đó trả về float, làm ``loss.item()`` ném ``AttributeError`` và âm thầm
-    cắt nhánh gradient khi cộng vào tổng loss (lỗi P0-8).
-
-    Cảnh báo thực tế: khi logit còn gần 0 (model mới khởi tạo), mọi cặp đều có
-    ``relu(margin - 0) ≈ margin`` nên loss đứng yên ở ~1.0 với gradient gần hằng
-    (đo trên pilot: 0.9966 → 0.9915). Loss này chỉ có ích khi logit đã tách; vì
-    vậy trọng số mặc định là 0.
-    """
-    total = logits.sum() * 0.0  # tensor giá trị 0 nhưng vẫn nối vào đồ thị
-    counted = 0
-    for column in range(logits.shape[1]):
-        column_targets = targets[:, column]
-        positives = logits[column_targets > 0.5, column]
-        negatives = logits[column_targets < 0.5, column]
-        if positives.numel() == 0 or negatives.numel() == 0:
-            continue
-        differences = positives.unsqueeze(1) - negatives.unsqueeze(0)
-        total = total + F.relu(margin - differences).mean()
-        counted += 1
-    return total / max(counted, 1)
-
-
 def kd_cosine_loss(student_feature: Tensor, teacher_feature: Tensor) -> Tensor:
     """Khoảng cách cosine giữa đặc trưng student và teacher (đã detach).
 
@@ -148,4 +140,4 @@ def kd_cosine_loss(student_feature: Tensor, teacher_feature: Tensor) -> Tensor:
     return (1.0 - (student * teacher).sum(dim=-1)).mean()
 
 
-__all__ = ["asymmetric_loss", "auc_margin_loss", "bce_loss", "info_nce", "kd_cosine_loss"]
+__all__ = ["asymmetric_loss", "bce_loss", "info_nce", "kd_cosine_loss"]

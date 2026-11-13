@@ -56,8 +56,8 @@ class TestOptimizerGroups:
 class TestEpochStats:
     def test_averages_over_steps(self) -> None:
         stats = EpochStats()
-        stats.update(total=2.0, kd=1.0, contrast=0.0, cls=1.0, auc=0.0)
-        stats.update(total=4.0, kd=3.0, contrast=0.0, cls=1.0, auc=0.0)
+        stats.update(total=2.0, kd=1.0, contrast=0.0, cls=1.0)
+        stats.update(total=4.0, kd=3.0, contrast=0.0, cls=1.0)
         assert stats.averaged()["total"] == pytest.approx(3.0)
         assert stats.averaged()["kd"] == pytest.approx(2.0)
 

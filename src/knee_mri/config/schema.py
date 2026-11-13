@@ -176,7 +176,6 @@ class LossWeights:
     kd: float
     contrast: float
     cls: float
-    auc: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +198,7 @@ class TrainCfg:
     cls_loss: str
     temp: float
     asl: AslCfg
-    auc_margin: float
+    memory_bank_size: int
 
 
 @dataclass(frozen=True, slots=True)

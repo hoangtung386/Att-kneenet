@@ -107,6 +107,14 @@ def _choice(value: Any, allowed: tuple[str, ...], key: str) -> str:
     return text
 
 
+def _non_negative_int(value: Any, key: str) -> int:
+    """Số nguyên >= 0; lỗi to khi âm hoặc không phải số."""
+    number = int(value)
+    if number < 0:
+        raise ConfigError(f"{key}={value!r} phải >= 0")
+    return number
+
+
 def _build_paths(raw: dict[str, Any]) -> Paths:
     return Paths(
         data_root=_resolve_path(_require(raw, "data_root", "paths")),
@@ -167,7 +175,6 @@ def _build_train(raw: dict[str, Any]) -> TrainCfg:
             kd=float(loss_raw.get("kd", 1.0)),
             contrast=float(loss_raw.get("contrast", 0.0)),
             cls=float(loss_raw.get("cls", 1.0)),
-            auc=float(loss_raw.get("auc", 0.0)),
         ),
         cls_loss=_choice(raw.get("cls_loss", "bce"), CLS_LOSSES, "train.cls_loss"),
         temp=float(raw.get("temp", 0.07)),
@@ -176,7 +183,9 @@ def _build_train(raw: dict[str, Any]) -> TrainCfg:
             gamma_pos=float(asl_raw.get("gamma_pos", 1.0)),
             clip=float(asl_raw.get("clip", 0.05)),
         ),
-        auc_margin=float(raw.get("auc_margin", 1.0)),
+        memory_bank_size=_non_negative_int(
+            raw.get("memory_bank_size", 2048), "train.memory_bank_size"
+        ),
     )
 
 

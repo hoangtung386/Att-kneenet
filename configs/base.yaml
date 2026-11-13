@@ -41,14 +41,13 @@ train:
   loss:
     kd: 1.0                 # KD đặc trưng ảnh từ 3DINO-ViT
     cls: 1.0                # phân loại 12 nhãn yếu
-    contrast: 0.0           # InfoNCE ảnh <-> text; chỉ bật khi batch >= 128 (batch 8 ≈ nhiễu)
-    auc: 0.0                # pairwise AUC-margin; chỉ có ích khi logit đã tách
+    contrast: 0.0           # InfoNCE ảnh <-> text; chỉ bật cùng memory_bank_size > 0 (batch nhỏ ≈ nhiễu)
   temp: 0.07                # temperature InfoNCE
   asl:
     gamma_neg: 4.0
     gamma_pos: 1.0
     clip: 0.05
-  auc_margin: 1.0
+  memory_bank_size: 2048    # số study guidance làm mẫu âm thêm cho InfoNCE; 0 = tắt
 
 vlm:
   model_id: google/gemma-3-12b-it

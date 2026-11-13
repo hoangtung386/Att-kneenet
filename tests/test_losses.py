@@ -8,7 +8,6 @@ torch = pytest.importorskip("torch")
 
 from knee_mri.training.losses import (  # noqa: E402
     asymmetric_loss,
-    auc_margin_loss,
     info_nce,
     kd_cosine_loss,
 )
@@ -76,39 +75,6 @@ class TestAsymmetricLoss:
         logits = torch.randn(4, 12, requires_grad=True)
         asymmetric_loss(logits, torch.zeros(4, 12)).backward()
         assert logits.grad is not None
-
-
-class TestAucMarginLoss:
-    """P0-8: bản cũ trả về ``float`` khi không có cặp positive/negative nào."""
-
-    def test_returns_tensor_when_no_valid_pair(self) -> None:
-        """Toàn nhãn âm — không nhãn nào đủ cặp. Vẫn phải là tensor có gradient.
-
-        Bản cũ trả về ``0.0`` (float Python), khiến ``loss.item()`` ném
-        ``AttributeError`` và cắt âm thầm nhánh gradient khi cộng vào tổng loss.
-        """
-        logits = torch.randn(4, 12, requires_grad=True)
-        loss = auc_margin_loss(logits, torch.zeros(4, 12))
-        assert torch.is_tensor(loss)
-        assert loss.requires_grad
-        assert loss.item() == pytest.approx(0.0)
-
-    def test_returns_tensor_when_all_positive(self) -> None:
-        logits = torch.randn(4, 12, requires_grad=True)
-        loss = auc_margin_loss(logits, torch.ones(4, 12))
-        assert torch.is_tensor(loss) and loss.requires_grad
-
-    def test_penalises_wrong_ranking(self) -> None:
-        """Xếp hạng sai phải chịu loss cao hơn xếp hạng đúng."""
-        targets = torch.tensor([[1.0], [0.0]])
-        good = auc_margin_loss(torch.tensor([[5.0], [-5.0]]), targets)
-        bad = auc_margin_loss(torch.tensor([[-5.0], [5.0]]), targets)
-        assert good < bad
-
-    def test_zero_when_margin_satisfied(self) -> None:
-        targets = torch.tensor([[1.0], [0.0]])
-        loss = auc_margin_loss(torch.tensor([[10.0], [-10.0]]), targets, margin=1.0)
-        assert loss.item() == pytest.approx(0.0)
 
 
 class TestInfoNce:
@@ -225,3 +191,49 @@ class TestClassificationLossSelection:
         assert text_grad(cfg) == 0.0
         enabled = replace(cfg, train=replace(cfg.train, loss=replace(cfg.train.loss, contrast=1.0)))
         assert text_grad(enabled) > 0.0
+
+
+class TestInfoNceWithBank:
+    """InfoNCE với mẫu âm bổ sung từ memory bank."""
+
+    @staticmethod
+    def _unit(rows: int, dim: int = 16) -> torch.Tensor:
+        return torch.nn.functional.normalize(torch.randn(rows, dim), dim=-1)
+
+    def test_empty_bank_equals_plain_infonce(self) -> None:
+        image, text = self._unit(4), self._unit(4)
+        plain = info_nce(image, text)
+        with_empty = info_nce(image, text, negative_text=torch.zeros(0, 16))
+        assert with_empty.item() == pytest.approx(plain.item())
+
+    def test_more_negatives_raise_random_loss_floor(self) -> None:
+        """Loss ngẫu nhiên là log(B + K): bank làm bài toán khó hơn."""
+        torch.manual_seed(0)
+        image, text = self._unit(4), self._unit(4)
+        plain = info_nce(image, text, temperature=1.0).item()
+        banked = info_nce(image, text, temperature=1.0, negative_text=self._unit(64)).item()
+        assert banked > plain
+
+    def test_bank_enables_single_sample_batch(self) -> None:
+        """Batch 1 study vẫn có tín hiệu nếu bank có mẫu âm."""
+        image = self._unit(1).requires_grad_(True)
+        loss = info_nce(image, image.detach(), negative_text=self._unit(8))
+        loss.backward()
+        assert loss.item() > 0 and image.grad is not None
+
+    def test_invalid_entries_are_ignored(self) -> None:
+        """Slot bị che (chính study đó) không được tính như mẫu âm."""
+        image = self._unit(2)
+        bank = image.clone()  # bank chứa đúng các mẫu dương -> sẽ thành âm giả
+        valid = ~torch.eye(2, dtype=torch.bool)
+        unmasked = info_nce(image, image, negative_text=bank)
+        masked = info_nce(image, image, negative_text=bank, negative_valid=valid)
+        plain = info_nce(image, image)
+        assert unmasked.item() > masked.item() + 0.1
+        assert masked.item() == pytest.approx(plain.item(), abs=1e-3)
+
+    def test_bank_receives_no_gradient(self) -> None:
+        image = self._unit(3).requires_grad_(True)
+        bank = self._unit(5).requires_grad_(True)
+        info_nce(image, image.detach(), negative_text=bank).backward()
+        assert bank.grad is None
