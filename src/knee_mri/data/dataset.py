@@ -15,6 +15,7 @@ Mọi thứ nặng đã được tính sẵn thành file trong ``artifacts/``:
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, TypedDict
 
 import numpy as np
@@ -22,6 +23,8 @@ from torch.utils.data import Dataset
 
 from knee_mri.config.schema import Config
 from knee_mri.constants import LABELS, NUM_LABELS
+from knee_mri.data.augment import AugmentCfg, augment_volume
+from knee_mri.data.cache import build_volume_cached
 from knee_mri.data.catalog import StudyCatalog
 from knee_mri.data.dicom_io import EmptySeriesError
 from knee_mri.data.series_selection import select_series
@@ -56,6 +59,8 @@ class KneeDataset(Dataset[StudySample]):
         use_dummy_teacher: Sinh đặc trưng teacher ngẫu nhiên thay vì đọc file.
             Chỉ dùng cho smoke test khi chưa chạy precompute.
         use_dummy_guidance: Tương tự cho guidance.
+        augment: Áp augmentation ngẫu nhiên lên volume. Chỉ bật cho tập train.
+        augment_cfg: Cường độ augmentation; ``None`` dùng mặc định.
     """
 
     def __init__(
@@ -66,12 +71,16 @@ class KneeDataset(Dataset[StudySample]):
         *,
         use_dummy_teacher: bool = False,
         use_dummy_guidance: bool = False,
+        augment: bool = False,
+        augment_cfg: AugmentCfg | None = None,
     ) -> None:
         self.study_uids = list(study_uids)
         self.catalog = catalog
         self.cfg = cfg
         self.use_dummy_teacher = use_dummy_teacher
         self.use_dummy_guidance = use_dummy_guidance
+        self.augment = augment
+        self.augment_cfg = augment_cfg
         self._rng = np.random.default_rng(cfg.seed)
 
     def __len__(self) -> int:
@@ -114,6 +123,27 @@ class KneeDataset(Dataset[StudySample]):
             return None
         return np.array([float(scores.get(name, 0)) for name in LABELS], dtype=np.float32)
 
+    def _volume(
+        self, study_uid: str, series_uid: str, series_dir: Path, mask: np.ndarray | None
+    ) -> np.ndarray:
+        """Dựng volume (qua cache nếu bật), rồi augment nếu đang ở tập train."""
+        if self.cfg.data.cache_volumes:
+            volume = build_volume_cached(
+                series_dir,
+                self.cfg.data,
+                cache_root=self.cfg.paths.volumes,
+                study_uid=study_uid,
+                series_uid=series_uid,
+                mask=mask,
+            )
+        else:
+            volume = build_volume(series_dir, self.cfg.data, mask=mask)
+        if self.augment:
+            # RNG mới mỗi lần gọi: mỗi worker DataLoader tự có nguồn ngẫu nhiên
+            # riêng thay vì sao chép cùng một chuỗi số.
+            volume = augment_volume(volume, np.random.default_rng(), self.augment_cfg)
+        return volume
+
     # ---------------------------------------------------------------- lấy mẫu
     def __getitem__(self, index: int) -> StudySample:
         study_uid = self.study_uids[index]
@@ -127,7 +157,7 @@ class KneeDataset(Dataset[StudySample]):
                 continue
             mask = load_mask(study_uid, series.series_uid, self.cfg.paths.masks)
             try:
-                volume = build_volume(series_dir, self.cfg.data, mask=mask)
+                volume = self._volume(study_uid, series.series_uid, series_dir, mask)
             except (EmptySeriesError, ValueError) as exc:
                 logger.warning("Bỏ qua series %s: %s", series.series_uid[:16], exc)
                 continue

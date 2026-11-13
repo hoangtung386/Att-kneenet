@@ -40,7 +40,8 @@ def build_volume(
 
     1. Đọc DICOM, sắp lát theo vị trí giải phẫu.
     2. Cắt ROI theo mask (nếu có) — làm **trước** khi resize để độ phân giải
-       hiệu dụng dồn vào vùng bệnh lý thay vì vào nền đen.
+       hiệu dụng dồn vào vùng bệnh lý thay vì vào nền đen. Mask có thể ở độ
+       phân giải bất kỳ (xem :func:`~knee_mri.utils.mask.roi_crop`).
     3. Resize trilinear trên float32 về ``cfg.target_shape``.
     4. Chuẩn hóa cường độ — làm **sau** resize để thống kê percentile được tính
        trên đúng tập voxel mà model sẽ nhìn thấy.
@@ -48,7 +49,7 @@ def build_volume(
     Args:
         series_dir: Thư mục chứa file ``.dcm``.
         cfg: Phần ``data`` của cấu hình.
-        mask: Mask ROI ``(D, H, W)`` cùng shape với volume thô, hoặc ``None``.
+        mask: Mask ROI 3 chiều ở độ phân giải bất kỳ, hoặc ``None``.
         roi_margin: Số voxel nới thêm quanh bounding box của mask.
 
     Returns:

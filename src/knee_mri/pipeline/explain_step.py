@@ -25,7 +25,7 @@ from knee_mri.inference.predictor import Predictor
 from knee_mri.models.heads import make_metadata_vector
 from knee_mri.models.report_generator import GemmaReportGenerator, rule_based_report
 from knee_mri.utils.logging import get_logger
-from knee_mri.utils.mask import load_mask
+from knee_mri.utils.mask import load_mask, roi_crop
 
 logger = get_logger(__name__)
 
@@ -97,13 +97,13 @@ def compute_cam(
     cam = attention_to_volume(
         attention_rollout(attentions), predictor.student.grid, cfg.data.target_shape
     )
-    # So CAM với mask đã resize về cùng shape mà student thực sự nhìn.
+    # Student nhìn volume đã cắt ROI rồi resize, nên mask phải đi qua đúng hai
+    # bước đó thì mới cùng hệ tọa độ với CAM.
     overlap: OverlapReport | None = None
     if mask is not None:
-        resized_mask = (resize_volume(mask.astype(np.float32), cfg.data.target_shape) > 0.5).astype(
-            np.uint8
-        )
-        overlap = cam_mask_overlap(cam, resized_mask)
+        cropped_mask = roi_crop(mask.astype(np.float32), mask)
+        aligned_mask = (resize_volume(cropped_mask, cfg.data.target_shape) > 0.5).astype(np.uint8)
+        overlap = cam_mask_overlap(cam, aligned_mask)
 
     return CamResult(
         series=series,

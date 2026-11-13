@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -60,19 +61,49 @@ def bounding_box(mask: np.ndarray, margin: int = 4) -> tuple[slice, slice, slice
     return slices[0], slices[1], slices[2]
 
 
+def scale_box(
+    box: tuple[slice, slice, slice],
+    from_shape: tuple[int, ...],
+    to_shape: tuple[int, ...],
+) -> tuple[slice, slice, slice]:
+    """Đổi bounding box từ lưới ``from_shape`` sang lưới ``to_shape``.
+
+    Cận dưới làm tròn xuống và cận trên làm tròn lên, nên hộp sau khi đổi luôn
+    chứa trọn vùng gốc và không bao giờ rỗng.
+    """
+    scaled: list[slice] = []
+    for axis_slice, source, target in zip(box, from_shape, to_shape, strict=True):
+        ratio = target / source
+        low = max(0, math.floor(axis_slice.start * ratio))
+        high = min(target, max(low + 1, math.ceil(axis_slice.stop * ratio)))
+        scaled.append(slice(low, high))
+    return scaled[0], scaled[1], scaled[2]
+
+
 def roi_crop(volume: np.ndarray, mask: np.ndarray | None = None, margin: int = 4) -> np.ndarray:
     """Cắt volume về vùng ROI của mask.
 
-    Trả về volume nguyên vẹn nếu mask là ``None``, rỗng, hoặc lệch shape.
-    Kết quả có shape **thay đổi** — hàm gọi phải resize lại về
+    Mask có thể ở độ phân giải **khác** volume. Mask từ bước S1 được sinh trên
+    volume đã resize về ``target_shape``, trong khi lúc huấn luyện ta cắt trên
+    DICOM thô (hàng trăm pixel mỗi chiều). Bản cũ trả volume nguyên vẹn mỗi khi
+    hai shape lệch nhau, nên mask không bao giờ có tác dụng với student. Nay
+    bounding box tính trên lưới của mask rồi được quy đổi sang lưới của volume.
+
+    Trả về volume nguyên vẹn nếu mask là ``None``, rỗng, hoặc không phải mảng 3
+    chiều. Kết quả có shape **thay đổi** — hàm gọi phải resize lại về
     :attr:`~knee_mri.config.schema.DataCfg.target_shape` (xem
     :func:`knee_mri.data.volume.build_volume`).
+
+    Args:
+        margin: Số voxel nới thêm quanh hộp, tính theo lưới của **mask**.
     """
-    if mask is None or mask.shape != volume.shape:
+    if mask is None or mask.ndim != 3 or volume.ndim != 3:
         return volume
     box = bounding_box(mask, margin)
     if box is None:
         return volume
+    if mask.shape != volume.shape:
+        box = scale_box(box, mask.shape, volume.shape)
     return volume[box]
 
 
@@ -83,4 +114,5 @@ __all__ = [
     "mask_path",
     "roi_crop",
     "save_mask",
+    "scale_box",
 ]
