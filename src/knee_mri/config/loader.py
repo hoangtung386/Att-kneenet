@@ -94,6 +94,19 @@ def _resolve_path(raw: str | Path) -> Path:
     return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
+#: Giá trị hợp lệ của các khóa dạng lựa chọn.
+POOLING_MODES: tuple[str, ...] = ("cls", "mean")
+CLS_LOSSES: tuple[str, ...] = ("bce", "asl")
+
+
+def _choice(value: Any, allowed: tuple[str, ...], key: str) -> str:
+    """Kiểm tra khóa dạng lựa chọn, lỗi to thay vì lặng lẽ rơi về mặc định."""
+    text = str(value).lower()
+    if text not in allowed:
+        raise ConfigError(f"{key}={value!r} không hợp lệ. Hợp lệ: {', '.join(allowed)}")
+    return text
+
+
 def _build_paths(raw: dict[str, Any]) -> Paths:
     return Paths(
         data_root=_resolve_path(_require(raw, "data_root", "paths")),
@@ -108,6 +121,7 @@ def _build_data(raw: dict[str, Any]) -> DataCfg:
         volume_size=(int(height), int(width)),
         max_slices=int(_require(raw, "max_slices", "data")),
         max_series=int(raw.get("max_series", 4)),
+        cache_volumes=bool(raw.get("cache_volumes", False)),
         norm_mode=str(_require(raw, "norm_mode", "data")),
         prefer_plane=str(raw.get("prefer_plane", "Sagittal")),
         prefer_fluid=int(raw.get("prefer_fluid", 1)),
@@ -132,6 +146,7 @@ def _build_model(raw: dict[str, Any]) -> ModelCfg:
         contrast_dim=int(raw.get("contrast_dim", 512)),
         metadata_dim=int(raw.get("metadata_dim", 5)),
         use_metadata=bool(raw.get("use_metadata", True)),
+        pooling=_choice(raw.get("pooling", "mean"), POOLING_MODES, "model.pooling"),
     )
 
 
@@ -150,10 +165,11 @@ def _build_train(raw: dict[str, Any]) -> TrainCfg:
         log_every=int(raw.get("log_every", 20)),
         loss=LossWeights(
             kd=float(loss_raw.get("kd", 1.0)),
-            contrast=float(loss_raw.get("contrast", 1.0)),
+            contrast=float(loss_raw.get("contrast", 0.0)),
             cls=float(loss_raw.get("cls", 1.0)),
-            auc=float(loss_raw.get("auc", 0.5)),
+            auc=float(loss_raw.get("auc", 0.0)),
         ),
+        cls_loss=_choice(raw.get("cls_loss", "bce"), CLS_LOSSES, "train.cls_loss"),
         temp=float(raw.get("temp", 0.07)),
         asl=AslCfg(
             gamma_neg=float(asl_raw.get("gamma_neg", 4.0)),
@@ -169,6 +185,7 @@ def _build_vlm(raw: dict[str, Any]) -> VlmCfg:
         model_id=str(_require(raw, "model_id", "vlm")),
         dtype=str(raw.get("dtype", "bfloat16")),
         guidance_max_slices=int(raw.get("guidance_max_slices", 4)),
+        guidance_use_images=bool(raw.get("guidance_use_images", False)),
         max_report_chars=int(raw.get("max_report_chars", 4000)),
         max_new_tokens=int(raw.get("max_new_tokens", 256)),
     )

@@ -1,8 +1,12 @@
-"""Teacher text: VLM đa modality đọc (ảnh + report) sinh vector guidance ``G``.
+"""Teacher text: VLM đọc report (và tùy chọn ảnh) sinh vector guidance ``G``.
 
-``G`` mã hóa tri thức lâm sàng nằm trong report. Student chỉ nhìn ảnh nhưng được
-huấn luyện để căn chỉnh với ``G``, nên lúc inference — khi không còn report —
-tri thức đó đã được "hấp thụ" vào trọng số của student.
+``G`` mã hóa tri thức lâm sàng nằm trong report. Mặc định chỉ đưa **report** cho
+VLM (``vlm.guidance_use_images: false``): khi kèm 4 ảnh, ~1000 token ảnh chiếm
+phần lớn chuỗi được mean-pool và pha loãng phần report — thứ duy nhất khác nhau
+giữa các study.
+
+Student chỉ nhìn ảnh nhưng được huấn luyện để căn chỉnh với ``G``, nên lúc
+inference — khi không còn report — tri thức đó đã được "hấp thụ" vào trọng số của student.
 
 Sửa lỗi P2-5 của bản cũ: các lát cắt được quy đổi qua
 :func:`~knee_mri.data.normalize.to_unit_range` trước khi cast uint8. Bản cũ làm
@@ -23,6 +27,13 @@ from knee_mri.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+_TEXT_ONLY_PROMPT = (
+    "You are a musculoskeletal radiologist. Below is the radiology report of a "
+    "knee MRI examination. Internally summarise the clinically salient findings "
+    "— ligaments, menisci, cartilage, effusion, bone marrow — into a single "
+    "rich representation."
+)
+
 _GUIDANCE_PROMPT = (
     "You are a musculoskeletal radiologist. Below are representative MRI slices "
     "of a knee examination together with its radiology report. Internally "
@@ -40,6 +51,7 @@ class GemmaGuidanceEncoder:
         self.device = device
         self.norm_mode = cfg.data.norm_mode
         self.expected_dim = cfg.model.guidance_dim
+        self.use_images = cfg.vlm.guidance_use_images
         self._model: Any = None
         self._processor: Any = None
 
@@ -86,22 +98,22 @@ class GemmaGuidanceEncoder:
         import torch
 
         self._ensure_loaded()
-        images = self._to_pil_images(volume)
+        images = self._to_pil_images(volume) if self.use_images else []
         content: list[dict[str, str]] = [{"type": "image"} for _ in images]
+        prompt_text = _GUIDANCE_PROMPT if images else _TEXT_ONLY_PROMPT
         content.append(
             {
                 "type": "text",
-                "text": (
-                    f"{_GUIDANCE_PROMPT}\n\nReport:\n{(report or '')[: self.vlm.max_report_chars]}"
-                ),
+                "text": f"{prompt_text}\n\nReport:\n{(report or '')[: self.vlm.max_report_chars]}",
             }
         )
         prompt = self._processor.apply_chat_template(
             [{"role": "user", "content": content}], add_generation_prompt=True
         )
-        inputs = self._processor(text=prompt, images=images, return_tensors="pt", padding=True).to(
-            self._model.device
-        )
+        processor_kwargs: dict[str, Any] = {"text": prompt, "return_tensors": "pt", "padding": True}
+        if images:
+            processor_kwargs["images"] = images
+        inputs = self._processor(**processor_kwargs).to(self._model.device)
 
         with torch.no_grad():
             outputs = self._model(**inputs, output_hidden_states=True)

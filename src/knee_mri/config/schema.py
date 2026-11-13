@@ -51,6 +51,10 @@ class Paths:
 
     # ---- artifacts ----
     @property
+    def volumes(self) -> Path:
+        return self.artifacts_root / "volumes"
+
+    @property
     def masks(self) -> Path:
         return self.artifacts_root / "masks"
 
@@ -105,6 +109,7 @@ class Paths:
         """
         for directory in (
             self.masks,
+            self.volumes,
             self.checkpoints,
             self.logs,
             self.cams,
@@ -124,6 +129,7 @@ class DataCfg:
     volume_size: tuple[int, int]
     max_slices: int
     max_series: int
+    cache_volumes: bool
     norm_mode: str
     prefer_plane: str
     prefer_fluid: int
@@ -155,6 +161,7 @@ class ModelCfg:
     contrast_dim: int
     metadata_dim: int
     use_metadata: bool
+    pooling: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +181,10 @@ class LossWeights:
 
 @dataclass(frozen=True, slots=True)
 class TrainCfg:
-    """Tham số vòng huấn luyện."""
+    """Tham số vòng huấn luyện.
+
+    ``cls_loss`` chọn hàm loss phân loại: ``"bce"`` hoặc ``"asl"``.
+    """
 
     batch_size: int
     epochs: int
@@ -186,6 +196,7 @@ class TrainCfg:
     amp_dtype: str
     log_every: int
     loss: LossWeights
+    cls_loss: str
     temp: float
     asl: AslCfg
     auc_margin: float
@@ -198,6 +209,7 @@ class VlmCfg:
     model_id: str
     dtype: str
     guidance_max_slices: int
+    guidance_use_images: bool
     max_report_chars: int
     max_new_tokens: int
 

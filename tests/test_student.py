@@ -146,3 +146,60 @@ class TestCamPipeline:
         _, attentions = student(batch, return_attn=True)
         with pytest.raises(ValueError, match="Số patch không khớp"):
             attention_to_volume(attention_rollout(attentions), (1, 1, 1), cfg.data.target_shape)
+
+
+class TestPositionEmbedding3D:
+    """Positional embedding phải phản ánh hình học 3D của lưới patch."""
+
+    def test_shape_includes_cls_row(self, student: ViT3DStudent, cfg: Config) -> None:
+        assert student.pos_embed.shape == (1, student.num_patches + 1, cfg.model.student_dim)
+
+    def test_cls_position_is_zero(self, student: ViT3DStudent) -> None:
+        assert student.pos_embed[0, 0].abs().sum() == 0
+
+    def test_neighbours_along_every_axis_are_closer_than_distant_patches(self) -> None:
+        from knee_mri.models.student import sinusoidal_position_embedding_3d
+
+        grid = (4, 4, 4)
+        embed = sinusoidal_position_embedding_3d(grid, 96)[0, 1:].reshape(*grid, -1)
+        origin = embed[0, 0, 0]
+        far = (origin - embed[3, 3, 3]).norm()
+        for neighbour in (embed[1, 0, 0], embed[0, 1, 0], embed[0, 0, 1]):
+            assert (origin - neighbour).norm() < far
+
+    def test_patches_sharing_a_coordinate_share_that_axis_block(self) -> None:
+        from knee_mri.models.student import sinusoidal_position_embedding_3d
+
+        embed = sinusoidal_position_embedding_3d((3, 3, 3), 96)[0, 1:].reshape(3, 3, 3, -1)
+        axis = (96 // 3) // 2 * 2
+        assert torch.equal(embed[1, 0, 0, :axis], embed[1, 2, 2, :axis])  # cùng d
+
+    def test_handles_dims_not_divisible_by_three(self) -> None:
+        from knee_mri.models.student import sinusoidal_position_embedding_3d
+
+        assert sinusoidal_position_embedding_3d((2, 2, 2), 64).shape == (1, 9, 64)
+
+    def test_rejects_tiny_dim(self) -> None:
+        from knee_mri.models.student import sinusoidal_position_embedding_3d
+
+        with pytest.raises(ValueError):
+            sinusoidal_position_embedding_3d((2, 2, 2), 3)
+
+
+class TestPooling:
+    def test_mean_and_cls_pooling_give_different_features(self, cfg: Config, batch) -> None:
+        from dataclasses import replace
+
+        torch.manual_seed(0)
+        mean_student = ViT3DStudent(cfg).eval()
+        cls_cfg = replace(cfg, model=replace(cfg.model, pooling="cls"))
+        cls_student = ViT3DStudent(cls_cfg).eval()
+        cls_student.load_state_dict(mean_student.state_dict())
+        assert cfg.model.pooling == "mean"
+        assert not torch.allclose(mean_student(batch)[0], cls_student(batch)[0])
+
+    def test_invalid_pooling_is_rejected_by_config(self) -> None:
+        from knee_mri.config import ConfigError, load_config
+
+        with pytest.raises(ConfigError):
+            load_config("test", overrides={"model": {"pooling": "max"}})

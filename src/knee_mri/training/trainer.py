@@ -1,11 +1,11 @@
 """Vòng huấn luyện student bằng text-guided knowledge distillation.
 
-Student (ViT-3D, **chỉ ảnh**) học đồng thời bốn mục tiêu:
+Student (ViT-3D, **chỉ ảnh**) học tối đa bốn mục tiêu, mỗi mục có trọng số
+riêng trong ``train.loss`` (trọng số 0 nghĩa là tắt):
 
-1. Bắt chước đặc trưng ảnh của 3DINO-ViT (KD).
-2. Căn chỉnh với guidance text của VLM qua InfoNCE — đây là cách tri thức trong
-   report được chuyển vào một model không bao giờ đọc report.
-3. Phân loại 12 nhãn bằng Asymmetric Loss trên nhãn yếu.
+1. Phân loại 12 nhãn yếu (BCE mặc định, hoặc Asymmetric Loss).
+2. Bắt chước đặc trưng ảnh của 3DINO-ViT (KD).
+3. Căn chỉnh với guidance text của VLM qua InfoNCE. Chỉ bật khi batch đủ lớn.
 4. Tối ưu thứ hạng bằng AUC-margin.
 
 Những gì bản cũ thiếu và nay đã có: mixed precision, gradient clipping, LR
@@ -38,7 +38,13 @@ from knee_mri.training.checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
-from knee_mri.training.losses import asymmetric_loss, auc_margin_loss, info_nce, kd_cosine_loss
+from knee_mri.training.losses import (
+    asymmetric_loss,
+    auc_margin_loss,
+    bce_loss,
+    info_nce,
+    kd_cosine_loss,
+)
 from knee_mri.training.metrics import AucReport, format_auc_report, macro_auc
 from knee_mri.utils.logging import get_logger
 
@@ -198,6 +204,19 @@ def _autocast(cfg: Config, device: str):
     return torch.autocast(device_type="cuda" if enabled else "cpu", dtype=dtype, enabled=enabled)
 
 
+def classification_loss(logits: Tensor, targets: Tensor, cfg: Config) -> Tensor:
+    """Loss phân loại theo ``train.cls_loss`` (``bce`` hoặc ``asl``)."""
+    if cfg.train.cls_loss == "asl":
+        return asymmetric_loss(
+            logits,
+            targets,
+            gamma_neg=cfg.train.asl.gamma_neg,
+            gamma_pos=cfg.train.asl.gamma_pos,
+            clip=cfg.train.asl.clip,
+        )
+    return bce_loss(logits, targets)
+
+
 def compute_losses(
     bundle: TrainingBundle, batch: KneeBatch, cfg: Config, device: str
 ) -> tuple[Tensor, dict[str, float]]:
@@ -220,13 +239,7 @@ def compute_losses(
 
     logits = bundle.classifier(features, metadata)
     study_logits = pool_per_study(logits, counts)
-    loss_cls = asymmetric_loss(
-        study_logits,
-        weak_labels,
-        gamma_neg=cfg.train.asl.gamma_neg,
-        gamma_pos=cfg.train.asl.gamma_pos,
-        clip=cfg.train.asl.clip,
-    )
+    loss_cls = classification_loss(study_logits, weak_labels, cfg)
     loss_auc = auc_margin_loss(study_logits, weak_labels, margin=cfg.train.auc_margin)
 
     weights = cfg.train.loss

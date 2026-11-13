@@ -7,6 +7,7 @@ data:
   volume_size: [128, 128]   # (H, W) sau resize
   max_slices: 64            # D cố định — bất biến shape của toàn pipeline
   max_series: 4             # số series tối đa lấy cho mỗi study
+  cache_volumes: false      # cache volume đã tiền xử lý (float16) vào artifacts/volumes
   norm_mode: volume_percentile_pm1
   prefer_plane: Sagittal
   prefer_fluid: 1
@@ -24,6 +25,7 @@ model:
   contrast_dim: 512
   metadata_dim: 5           # one-hot plane (3) + fluid (1) + fat (1)
   use_metadata: true
+  pooling: mean             # mean (trung bình patch) | cls (token CLS)
 
 train:
   batch_size: 4
@@ -35,11 +37,12 @@ train:
   num_workers: 4
   amp_dtype: bfloat16       # bfloat16 | float16 | none
   log_every: 20
+  cls_loss: bce             # bce | asl — nhãn dương 8–39% nên BCE là mặc định hợp lý
   loss:
     kd: 1.0                 # KD đặc trưng ảnh từ 3DINO-ViT
-    contrast: 1.0           # InfoNCE image <-> text guidance
-    cls: 1.0                # Asymmetric Loss trên 12 nhãn
-    auc: 0.5                # pairwise AUC-margin surrogate
+    cls: 1.0                # phân loại 12 nhãn yếu
+    contrast: 0.0           # InfoNCE ảnh <-> text; chỉ bật khi batch >= 128 (batch 8 ≈ nhiễu)
+    auc: 0.0                # pairwise AUC-margin; chỉ có ích khi logit đã tách
   temp: 0.07                # temperature InfoNCE
   asl:
     gamma_neg: 4.0
@@ -51,6 +54,7 @@ vlm:
   model_id: google/gemma-3-12b-it
   dtype: bfloat16
   guidance_max_slices: 4
+  guidance_use_images: false  # false: chỉ report (ảnh chiếm ~1000 token và pha loãng guidance)
   max_report_chars: 4000
   max_new_tokens: 256
 

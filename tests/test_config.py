@@ -90,3 +90,25 @@ class TestPaths:
 
     def test_series_dir_returns_none_when_missing(self, cfg: Config) -> None:
         assert cfg.paths.series_dir("khong-co", "khong-co") is None
+
+
+class TestRefactoredDefaults:
+    """Mặc định dựa trên phân tích nguyên nhân gốc (docs/root_cause_analysis.md)."""
+
+    def test_default_classification_loss_is_bce(self) -> None:
+        assert load_config("test").train.cls_loss == "bce"
+
+    def test_unreliable_loss_branches_are_off_by_default(self) -> None:
+        weights = load_config("test").train.loss
+        assert weights.contrast == 0.0 and weights.auc == 0.0
+        assert weights.cls > 0.0 and weights.kd > 0.0
+
+    def test_unknown_cls_loss_is_rejected(self) -> None:
+        with pytest.raises(ConfigError):
+            load_config("test", overrides={"train": {"cls_loss": "focal"}})
+
+    def test_volume_cache_is_opt_in(self) -> None:
+        assert load_config("test").data.cache_volumes is False
+
+    def test_guidance_is_text_only_by_default(self) -> None:
+        assert load_config("test").vlm.guidance_use_images is False

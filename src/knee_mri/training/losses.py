@@ -2,15 +2,18 @@
 
 Bối cảnh: chỉ 58/4407 study có nhãn do người gán, nhưng **mọi** study đều có
 report. Chiến lược là bóc tri thức từ 4407 cặp (ảnh, report) thay vì chỉ dựa vào
-58 nhãn. Bốn thành phần:
+58 nhãn. Năm thành phần:
 
-1. :func:`info_nce` — căn chỉnh đặc trưng ảnh của student với guidance text
-   trong không gian chung (kiểu CLIP). Đây là động cơ giám sát yếu chính.
-2. :func:`asymmetric_loss` — cho 12 nhãn cực mất cân bằng (dương tính ~1–2%).
-3. :func:`auc_margin_loss` — tối ưu trực tiếp thứ hạng, tức metric AUC.
-4. :func:`kd_cosine_loss` — giữ đặc trưng ảnh mạnh từ 3DINO-ViT.
+1. :func:`bce_loss` — phân loại 12 nhãn trên nhãn yếu. Mặc định, vì nhãn chỉ
+   mất cân bằng vừa phải (xem ``docs/data_notes.md``).
+2. :func:`kd_cosine_loss` — giữ đặc trưng ảnh mạnh từ 3DINO-ViT.
+3. :func:`asymmetric_loss` — lựa chọn cho nhãn *thực sự* cực thưa (~1%).
+4. :func:`info_nce` — căn chỉnh ảnh với guidance text. Chỉ có nghĩa khi batch
+   lớn; mặc định tắt (trọng số 0).
+5. :func:`auc_margin_loss` — tối ưu thứ hạng; chỉ hữu ích khi logit đã tách,
+   nên mặc định tắt.
 
-Tổng: ``L = λ_kd·L_kd + λ_ctr·L_infonce + λ_cls·L_asl + λ_auc·L_auc``.
+Tổng: ``L = λ_kd·L_kd + λ_cls·L_cls + λ_ctr·L_infonce + λ_auc·L_auc``.
 """
 
 from __future__ import annotations
@@ -27,9 +30,10 @@ def info_nce(
 ) -> Tensor:
     """InfoNCE đối xứng giữa đặc trưng ảnh và guidance text.
 
-    Mỗi study trong batch là một cặp dương; các study còn lại là cặp âm. Vì thế
-    ``batch_size`` càng lớn thì tín hiệu càng mạnh — với batch quá nhỏ, loss này
-    gần như không học được gì.
+    Mỗi study trong batch là một cặp dương; các study còn lại là cặp âm. Với
+    batch ``B`` thì loss của model ngẫu nhiên là ``log(B)``: ở ``B = 8`` loss
+    dậm chân quanh 2.08 và không truyền được tri thức. Cần batch hàng trăm
+    (hoặc memory bank) thì loss này mới có nghĩa.
 
     Args:
         image_embedding: ``(B, D)`` đã L2-normalize.
@@ -44,6 +48,23 @@ def info_nce(
     return (F.cross_entropy(logits, targets) + F.cross_entropy(logits.t(), targets)) / 2
 
 
+def bce_loss(logits: Tensor, targets: Tensor, *, pos_weight: Tensor | None = None) -> Tensor:
+    """Binary cross-entropy đa nhãn, **tổng** theo nhãn rồi trung bình theo mẫu.
+
+    Cùng quy ước rút gọn với :func:`asymmetric_loss` nên đổi qua lại giữa hai
+    loss không làm đổi thang đo so với các thành phần khác của tổng loss.
+
+    Args:
+        logits: ``(B, C)`` logit thô, chưa qua sigmoid.
+        targets: ``(B, C)`` giá trị trong ``{0, 1}``.
+        pos_weight: ``(C,)`` hệ số nhân cho mẫu dương của từng nhãn, hoặc ``None``.
+    """
+    per_element = F.binary_cross_entropy_with_logits(
+        logits, targets.to(logits.dtype), reduction="none", pos_weight=pos_weight
+    )
+    return per_element.sum(dim=1).mean()
+
+
 def asymmetric_loss(
     logits: Tensor,
     targets: Tensor,
@@ -53,6 +74,10 @@ def asymmetric_loss(
     clip: float = 0.05,
 ) -> Tensor:
     """Asymmetric Loss (Ben-Baruch et al., 2021) cho multi-label mất cân bằng.
+
+    Thiết kế cho nhãn **cực** thưa (dương tính ~1%). Dữ liệu này có 8–39% dương
+    mỗi nhãn, nơi ``gamma_neg = 4`` hạ trọng số mẫu âm quá tay và làm lệch xác
+    suất về phía dương — dùng :func:`bce_loss` làm mặc định.
 
     Ý tưởng: hạ trọng số các mẫu âm **dễ** (model đã đoán đúng là âm với độ tin
     cậy cao) để gradient dồn vào các mẫu dương hiếm và mẫu âm khó.
@@ -93,9 +118,10 @@ def auc_margin_loss(logits: Tensor, targets: Tensor, *, margin: float = 1.0) -> 
     hợp đó trả về float, làm ``loss.item()`` ném ``AttributeError`` và âm thầm
     cắt nhánh gradient khi cộng vào tổng loss (lỗi P0-8).
 
-    Cảnh báo thực tế: với tỉ lệ dương ~1–2% và batch nhỏ, phần lớn batch sẽ không
-    có nhãn nào đủ cặp. Muốn loss này thực sự hoạt động cần batch lớn hoặc
-    sampler cân bằng.
+    Cảnh báo thực tế: khi logit còn gần 0 (model mới khởi tạo), mọi cặp đều có
+    ``relu(margin - 0) ≈ margin`` nên loss đứng yên ở ~1.0 với gradient gần hằng
+    (đo trên pilot: 0.9966 → 0.9915). Loss này chỉ có ích khi logit đã tách; vì
+    vậy trọng số mặc định là 0.
     """
     total = logits.sum() * 0.0  # tensor giá trị 0 nhưng vẫn nối vào đồ thị
     counted = 0
@@ -122,4 +148,4 @@ def kd_cosine_loss(student_feature: Tensor, teacher_feature: Tensor) -> Tensor:
     return (1.0 - (student * teacher).sum(dim=-1)).mean()
 
 
-__all__ = ["asymmetric_loss", "auc_margin_loss", "info_nce", "kd_cosine_loss"]
+__all__ = ["asymmetric_loss", "auc_margin_loss", "bce_loss", "info_nce", "kd_cosine_loss"]

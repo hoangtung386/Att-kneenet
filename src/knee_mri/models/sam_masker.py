@@ -46,7 +46,8 @@ class SamMaskGenerator:
 
         logger.info("Đang nạp SAM %s...", self.cfg.sam.model_id)
         self._processor = SamProcessor.from_pretrained(self.cfg.sam.model_id)
-        self._model = SamModel.from_pretrained(self.cfg.sam.model_id).to(self.device).eval()
+        model_cls: Any = SamModel  # stub của transformers suy luận sai kiểu của from_pretrained
+        self._model = model_cls.from_pretrained(self.cfg.sam.model_id).to(self.device).eval()
 
     def mask_from_bbox(self, plane: np.ndarray, bbox: list[int]) -> np.ndarray:
         """Sinh mask 2D ``(H, W)`` uint8 cho một lát cắt từ bounding box."""

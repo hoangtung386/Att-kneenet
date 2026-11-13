@@ -143,3 +143,85 @@ class TestKdCosineLoss:
         kd_cosine_loss(student, teacher).backward()
         assert student.grad is not None
         assert teacher.grad is None
+
+
+class TestBceLoss:
+    def test_matches_manual_formula(self) -> None:
+        from knee_mri.training.losses import bce_loss
+
+        logits = torch.tensor([[0.0, 2.0]])
+        targets = torch.tensor([[1.0, 0.0]])
+        expected = -torch.log(torch.tensor(0.5)) - torch.log(1 - torch.sigmoid(torch.tensor(2.0)))
+        assert torch.isclose(bce_loss(logits, targets), expected)
+
+    def test_confident_wrong_costs_more_than_confident_right(self) -> None:
+        from knee_mri.training.losses import bce_loss
+
+        targets = torch.tensor([[1.0]])
+        assert bce_loss(torch.tensor([[-4.0]]), targets) > bce_loss(torch.tensor([[4.0]]), targets)
+
+    def test_pos_weight_scales_positive_term(self) -> None:
+        from knee_mri.training.losses import bce_loss
+
+        logits, targets = torch.tensor([[0.0]]), torch.tensor([[1.0]])
+        weighted = bce_loss(logits, targets, pos_weight=torch.tensor([3.0]))
+        assert torch.isclose(weighted, 3 * bce_loss(logits, targets))
+
+    def test_is_differentiable(self) -> None:
+        from knee_mri.training.losses import bce_loss
+
+        logits = torch.zeros(2, 3, requires_grad=True)
+        bce_loss(logits, torch.ones(2, 3)).backward()
+        assert logits.grad is not None and logits.grad.abs().sum() > 0
+
+
+class TestClassificationLossSelection:
+    def test_default_is_bce(self, cfg) -> None:
+        from knee_mri.training.losses import bce_loss
+        from knee_mri.training.trainer import classification_loss
+
+        logits, targets = torch.randn(4, 12), (torch.rand(4, 12) > 0.7).float()
+        assert torch.isclose(classification_loss(logits, targets, cfg), bce_loss(logits, targets))
+
+    def test_asl_is_selectable(self, cfg) -> None:
+        from dataclasses import replace
+
+        from knee_mri.training.trainer import classification_loss
+
+        asl_cfg = replace(cfg, train=replace(cfg.train, cls_loss="asl"))
+        logits, targets = torch.randn(4, 12), (torch.rand(4, 12) > 0.7).float()
+        assert not torch.isclose(
+            classification_loss(logits, targets, cfg), classification_loss(logits, targets, asl_cfg)
+        )
+
+    def test_zero_weighted_branches_get_no_gradient_but_enabled_ones_do(self, cfg) -> None:
+        """Mặc định contrast=0: text projector không nhận gradient; bật lên thì có."""
+        from dataclasses import replace
+
+        from knee_mri.data.collate import collate_studies
+        from knee_mri.training.trainer import build_bundle, compute_losses
+
+        def sample(uid: str) -> dict:
+            depth, height, width = cfg.data.target_shape
+            return {
+                "study_uid": uid,
+                "volumes": [torch.randn(depth, height, width).numpy()],
+                "teacher_feats": [torch.randn(cfg.model.teacher_dim).numpy()],
+                "metadata": [[1.0, 0.0, 0.0, 1.0, 1.0]],
+                "guidance": torch.randn(cfg.model.guidance_dim).numpy(),
+                "weak_label": (torch.rand(12) > 0.5).float().numpy(),
+                "gold_label": None,
+            }
+
+        batch = collate_studies([sample("a"), sample("b"), sample("c")])
+
+        def text_grad(config) -> float:
+            bundle = build_bundle(config)
+            loss, _ = compute_losses(bundle, batch, config, "cpu")
+            loss.backward()
+            grads = [p.grad for p in bundle.text_contrast.parameters() if p.grad is not None]
+            return float(sum(g.abs().sum() for g in grads)) if grads else 0.0
+
+        assert text_grad(cfg) == 0.0
+        enabled = replace(cfg, train=replace(cfg.train, loss=replace(cfg.train.loss, contrast=1.0)))
+        assert text_grad(enabled) > 0.0
