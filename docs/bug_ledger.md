@@ -16,7 +16,7 @@ thiếu chức năng thiết yếu, **P2** sai về dữ liệu/nhãn, **P3** v�
 | P0-5 | `nn.Parameter` `pos_embed` tạo lại trong `forward`, nằm ngoài optimizer nên luôn bằng 0 | `models/student/vit3d.py` | `test_student.py::TestPositionEmbedding` |
 | P0-6 | `roi_crop` trả shape tùy ý, `torch.cat` vỡ khi H/W lệch | `data/volume.py`, `data/collate.py` | `test_data.py::TestVolumeShapeInvariant` |
 | P0-7 | Asymmetric Loss cài ngược hướng (mẫu âm dễ nhận trọng số ≈ 1), phần dương sai công thức | `training/losses.py` | `test_losses.py::TestAsymmetricLoss` |
-| P0-8 | `auc_margin_loss` trả `float` khi không có cặp dương/âm, cắt nhánh gradient | `training/losses.py` | `test_losses.py::TestAucMarginLoss` |
+| P0-8 | `auc_margin_loss` trả `float` khi không có cặp dương/âm, cắt nhánh gradient | `training/losses.py` | Hàm đã bị xóa khỏi codebase (không còn dùng); mã lỗi giữ làm lịch sử |
 | P0-9 | Cấu hình là hằng số cấp module, ghi đè từ notebook bị nuốt im lặng | `config/schema.py` | `test_config.py::TestOverridesActuallyApply` |
 | P1-1 | `read_csv` gọi lại trong `select_series` ở mỗi sample, mỗi epoch | `data/catalog.py` | `test_data.py::TestCatalog::test_lookups_do_not_touch_disk` |
 | P1-2 | Tương tự P1-1 với `load_study_report` | `data/catalog.py` | `test_data.py::TestCatalog::test_lookups_do_not_touch_disk` |

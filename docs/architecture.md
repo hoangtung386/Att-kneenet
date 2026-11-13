@@ -107,11 +107,13 @@ trên CPU) và VLM (`labeling/llm_based.py`, cần GPU). Cả hai đều là bư
   L = λ_kd  · cosine(proj_img(feat), 3DINO)          # mặc định 1.0
     + λ_cls · BCE(logits, weak_label)                # mặc định 1.0 (hoặc ASL)
     + λ_ctr · InfoNCE(img_embed, text_embed)         # mặc định 0.0
-    + λ_auc · AUCMargin(logits, weak_label)          # mặc định 0.0
   ```
 
-  InfoNCE tắt vì với batch 8 loss ngẫu nhiên là log 8 ≈ 2.08 và không truyền được tri
-  thức; chỉ bật khi batch ≥ 128. AUC-margin tắt vì khi logit chưa tách nó đứng yên ở ≈ 1.0.
+  InfoNCE tắt mặc định vì với batch 8 loss ngẫu nhiên là log 8 ≈ 2.08 và không truyền
+  được tri thức. Khi bật, `train.memory_bank_size` (mặc định 2048) thêm guidance của các
+  study trước làm mẫu âm: bank lưu vector guidance **thô** và chiếu lại bằng
+  `text_contrast` hiện tại mỗi bước, nên không có embedding lỗi thời. Chiều ảnh → text
+  so với `B + K` text; chiều text → ảnh chỉ trong batch. Hàm loss AUC-margin đã bị xóa.
   Xem `docs/root_cause_analysis.md` §4.
 
 - Student **không bao giờ** thấy text lúc forward; text chỉ tạo mục tiêu KD.

@@ -50,7 +50,7 @@ Nếu bạn thấy mình đang định vi phạm một trong số này, gần nh
 | 8 | Ảnh qua `to_unit_range()` trước khi vào SAM/VLM | `test_normalize.py`, `test_model_wrappers.py` |
 | 9 | Mask ROI ở độ phân giải bất kỳ vẫn phải **thực sự cắt** volume (không bỏ qua im lặng khi lệch shape) | `test_data.py::TestVolumeShapeInvariant`, `TestRoiCrop` |
 | 10 | Pixel DICOM không qua windowing theo lát; lát sắp theo pháp tuyến mặt phẳng | `test_dicom_io.py` |
-| 11 | Mặc định loss: BCE, `contrast` và `auc` = 0 cho tới khi có bằng chứng chúng giúp ích | `test_config.py::TestRefactoredDefaults` |
+| 11 | Mặc định loss: BCE, `contrast` = 0 cho tới khi có bằng chứng nó giúp ích | `test_config.py::TestRefactoredDefaults` |
 
 Bối cảnh của từng mã lỗi (`P0-6`, `P2-5`...) nằm ở [docs/bug_ledger.md](docs/bug_ledger.md).
 
@@ -122,7 +122,9 @@ Trong phần mô tả PR, nêu rõ:
   để không lẫn file `.npy` lệch chiều rồi vỡ giữa lúc huấn luyện.
 - **`vendor/3DINO`** mang license CC BY-NC-ND: chỉ nghiên cứu phi thương mại và
   **không được sửa** code trong đó.
-- **Loss AUC-margin** cần mỗi batch có cả mẫu dương lẫn mẫu âm cho ít nhất một
-  nhãn. Với batch nhỏ có thể không thỏa, và khi logit chưa tách loss chỉ đứng yên
-  ở ~1.0 (mặc định đã tắt, `train.loss.auc: 0`). Tăng
-  `train.batch_size` hoặc thêm sampler cân bằng nếu muốn loss này thực sự hoạt động.
+- **InfoNCE** (`train.loss.contrast`) với batch nhỏ chỉ có vài mẫu âm. Memory bank
+  (`train.memory_bank_size`, `training/memory_bank.py`) bổ sung mẫu âm bằng guidance của
+  các study trước; nó **không** được lưu trong checkpoint nên đầy lại sau vài trăm bước.
+  Bank chỉ hoạt động khi `contrast > 0`. Chưa có bằng chứng loss này giúp ích: chạy
+  `scripts/similarity.py` trước, nếu guidance giống nhau quá (cosine > 0.95) thì bật nó
+  cũng vô ích.

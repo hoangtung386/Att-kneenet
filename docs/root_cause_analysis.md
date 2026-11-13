@@ -38,7 +38,7 @@ Thứ tự ưu tiên khi sửa nằm ở §6.
 | 1 | Checkpoint nộp là bản pilot | **Chưa làm** | Cần huấn luyện lại; không phải việc của code |
 | 2 | Mask ROI không bao giờ được áp | **Đã sửa** | `roi_crop` quy đổi mask sang lưới của DICOM thô; `TestRoiCrop`, `TestVolumeShapeInvariant` |
 | 3 | ViT-3D từ đầu, không augmentation | **Một phần** | Đã thêm augmentation, mean-pool, positional embedding 3D. Chưa có backbone pretrain |
-| 4 | InfoNCE, AUC-margin, KD không có tín hiệu | **Một phần** | InfoNCE và AUC-margin mặc định tắt; KD nay khớp vùng crop với teacher. Chưa có memory bank |
+| 4 | InfoNCE, AUC-margin, KD không có tín hiệu | **Một phần** | AUC-margin đã xóa hẳn; InfoNCE mặc định tắt và có memory bank (`train.memory_bank_size`) cho mẫu âm; KD nay khớp vùng crop với teacher. Chưa kiểm chứng bằng huấn luyện; đo cosine bằng `knee-similarity` |
 | 5 | Độ phân giải đầu vào thấp | **Chưa làm** | Vẫn 128 px và 64 lát; đổi sẽ tăng bộ nhớ mạnh, cần quyết định riêng |
 | 6 | Tiền đề nhãn cực thưa sai | **Đã sửa** | BCE mặc định; tài liệu đã được đính chính |
 | 7 | Guidance bị pha loãng bởi token ảnh | **Đã sửa, chưa kiểm chứng** | Guidance mặc định chỉ dùng report; chưa đo cosine giữa các vector |
@@ -336,6 +336,8 @@ bài toán multi-label **cân bằng vừa phải**, không phải cực thưa. 
   đo một phân bố khác với phân bố huấn luyện.
 
 ### 4.4 AUC-margin loss đứng yên
+
+> **Đã xử lý:** hàm `auc_margin_loss` và các tham số `train.loss.auc`, `train.auc_margin` đã bị xóa khỏi codebase.
 
 `auc_margin_loss` với `margin = 1.0`: khi logit đều gần 0 (model mới khởi
 tạo), `relu(1 − (pos − neg)) ≈ 1` cho mọi cặp → loss ≈ 1.0 và gradient hằng.

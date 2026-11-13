@@ -59,6 +59,7 @@ python scripts/precompute_weak_labels.py  --env colab --use-vlm
 python scripts/precompute_teacher_feats.py --env colab  # 3DINO-ViT
 python scripts/precompute_guidance.py     --env colab   # guidance từ VLM
 python scripts/probe.py                   --env colab   # baseline nhanh trên đặc trưng 3DINO
+python scripts/similarity.py              --env colab   # cosine giữa guidance / teacher đã cache
 python scripts/train.py                   --env colab   # S2: KD
 python scripts/evaluate.py                --env colab   # AUC trên 58 nhãn gold
 python scripts/explain.py                 --env colab   # S3: CAM + báo cáo
@@ -75,7 +76,8 @@ Mọi lệnh cũng gọi được qua `python -m knee_mri.cli <lệnh>`, hoặc 
 AUC ≈ 0.5 thường là model chưa học, không phải học sai. Đọc
 [docs/root_cause_analysis.md](docs/root_cause_analysis.md) trước khi chạy lại. Chạy
 `scripts/probe.py` sau `precompute_teacher_feats.py` để biết nhãn và đặc trưng 3DINO
-có đủ tốt không, trước khi tốn giờ GPU huấn luyện student.
+có đủ tốt không, trước khi tốn giờ GPU huấn luyện student. `scripts/similarity.py` đo
+cosine giữa các vector guidance và teacher để kiểm chứng giả thuyết §4.2 và §4.5.
 
 > Checkpoint cũ huấn luyện với token CLS: đặt `--set model.pooling=cls` khi nạp lại.
 
@@ -112,14 +114,14 @@ configs/                 # cấu hình YAML theo môi trường
 docs/                    # kiến trúc, dữ liệu, chuẩn hóa, phân tích nguyên nhân, sổ mã lỗi
 notebooks/               # 01 phân tích dữ liệu · 02 huấn luyện Colab · 03 trực quan hóa · 04 nộp Kaggle
 scripts/                 # entrypoint CLI mỏng, mỗi file một bước
-tests/                   # 308 test, chạy được không cần GPU
+tests/                   # 325 test, chạy được không cần GPU
 src/knee_mri/
   config/                # schema dataclass + loader YAML
   constants.py           # LABELS, tên cột CSV — hằng số của đề bài
   data/                  # DICOM → volume, index CSV, Dataset, collate, chia tập
   labeling/              # weak label từ report (luật đa ngôn ngữ + VLM)
   models/                # student ViT-3D, teacher, SAM, sinh báo cáo
-  training/              # loss, metric, checkpoint, vòng huấn luyện
+  training/              # loss, memory bank, metric, probe, similarity, checkpoint, vòng huấn luyện
   explain/               # CAM và đối chiếu với mask ROI
   inference/             # sinh submission
   pipeline/              # các bước S1/S2/S3 gọi được độc lập
@@ -137,8 +139,8 @@ make smoke          # chạy pipeline đầu-cuối trên tập nhỏ, không c�
 | Cổng | Trạng thái |
 |---|---|
 | `ruff check` + `ruff format` | sạch |
-| `mypy` (55 file) | không lỗi |
-| `pytest` | 308 test |
+| `mypy` (57 file) | không lỗi |
+| `pytest` | 325 test |
 | Độ phủ | ~83% |
 
 Test khóa lại **từng** lỗi đã sửa trong đợt refactor, nên chúng không thể tái
