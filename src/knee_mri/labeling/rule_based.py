@@ -150,16 +150,9 @@ def keyword_labeler(report: str, *, labels: Sequence[str] = LABELS) -> dict[str,
     return result
 
 
-def label_vector(report: str, *, labels: Sequence[str] = LABELS) -> list[int]:
-    """Như :func:`keyword_labeler` nhưng trả về vector theo đúng thứ tự nhãn."""
-    scores = keyword_labeler(report, labels=labels)
-    return [scores[label] for label in labels]
-
-
 __all__ = [
     "is_negated",
     "keyword_labeler",
-    "label_vector",
     "negation_positions",
     "split_clauses",
 ]

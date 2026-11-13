@@ -15,7 +15,7 @@ from knee_mri.labeling.evaluate import (
     score_labeler,
 )
 from knee_mri.labeling.llm_based import GemmaReportParser, extract_json_labels
-from knee_mri.labeling.rule_based import keyword_labeler, label_vector
+from knee_mri.labeling.rule_based import keyword_labeler
 
 __all__ = [
     "GemmaReportParser",
@@ -24,6 +24,5 @@ __all__ = [
     "extract_json_labels",
     "format_labeler_report",
     "keyword_labeler",
-    "label_vector",
     "score_labeler",
 ]
